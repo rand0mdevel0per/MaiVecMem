@@ -116,16 +116,14 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO mai_user;
 使用 CLI 工具初始化数据库：
 
 ```bash
-python cli_tool.py
+python cli_tool.py init
 ```
-选择`Initialize Graph Memory Tables`选项
 
 ### 3. 导入知识库数据
 
 ```bash
-python cli_tool.py
+python cli_tool.py import path/to/knowledge_base.json
 ```
-选择`Load Dataset from Local .json File`选项，提供知识库 JSON 文件路径
 
 ## 性能优化配置
 
