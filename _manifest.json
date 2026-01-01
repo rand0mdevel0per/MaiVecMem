@@ -9,8 +9,8 @@
   },
   "license": "MIT",
   "host_application": {
-    "min_version": "0.0.0",
-    "max_version": "9.0.0"
+    "min_version": "0.10.0",
+    "max_version": "0.14.0"
   },
   "repository_url": "https://github.com/rand0mdevel0per/MaiVecMem.git"
 }
