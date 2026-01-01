@@ -4,7 +4,13 @@
   "version": "1.0.0",
   "description": "一个使用 PostgreSQL & PgVector Plugin 数据库存储和检索记忆的插件。",
   "author": {
-    "name": "rand0mdevel0per"
+    "name": "rand0mdevel0per",
+    "url": "https://github.com/rand0mdevel0per"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "host_application": {
+    "min_version": "0.0.0",
+    "max_version": "9.0.0"
+  },
+  "repository_url": "https://github.com/rand0mdevel0per/MaiVecMem.git"
 }

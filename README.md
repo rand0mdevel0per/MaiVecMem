@@ -7,7 +7,6 @@ MaiVecMem 是 [MaiBot](https://github.com/Mai-with-u/MaiBot) 的一个附属插�
 - 基于 PostgreSQL 的向量化存储
 - 高效的记忆检索功能
 - 支持 CLI 工具进行数据库管理
-- 兼容 MaiBot 主程序的知识库格式
 
 ## 目录结构
 
