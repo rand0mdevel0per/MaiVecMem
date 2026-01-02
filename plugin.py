@@ -6,13 +6,13 @@ import asyncio
 import asyncpg
 import timeit
 import ujson
+from typing import List, Tuple, Type, Dict, Any
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 target_path = os.path.abspath(os.path.join(current_dir, "../.."))
 if target_path not in sys.path:
     sys.path.insert(0, target_path)
 
-from typing import List, Tuple, Type
 from src.plugin_system import BasePlugin, register_plugin, ComponentInfo, ConfigField, BaseTool
 
 dbman = None
@@ -28,90 +28,100 @@ class PgVecMemPlugin(BasePlugin):
     dependencies = []
     python_dependencies = ["uuid", "dataclasses", "typing", "asyncpg", "numpy", "openai", "timeit", "ujson"]
     config_file_name = "config.toml"  # 配置文件名
-    config_schema = \
-        {
-            "postgresql":
-                {
-                    "host": ConfigField(type=str,
-                                        default="localhost",
-                                        description="PostgreSQL服务器地址",
-                                        hint="你的PostgreSQL服务器地址，通常是localhost或IP地址"),
-                    "port": ConfigField(type=int,
-                                        default=5432,
-                                        description="PostgreSQL服务器端口",
-                                        min=1, max=65535,
-                                        hint="你的PostgreSQL服务器端口，默认是5432"),
-                    "user": ConfigField(type=str,
-                                        default="postgres",
-                                        description="PostgreSQL用户名",
-                                        hint="用于连接PostgreSQL数据库的用户名"),
-                    "password": ConfigField(type=str,
-                                            default="yourpassword",
-                                            description="PostgreSQL密码",
-                                            input_type="password",
-                                            hint="用于连接PostgreSQL数据库的密码"),
-                    "database": ConfigField(type=str,
-                                            default="pgvec_maimem_db",
-                                            description="PostgreSQL数据库名",
-                                            hint="用于存储记忆数据的数据库名称"),
-                    "ssl": ConfigField(type=bool,
-                                       default=False,
-                                       description="是否启用SSL连接",
-                                       hint="如果你的PostgreSQL服务器启用了SSL连接，请设置为True"),
-                },
-            "openai_embedding":
-                {
-                    "api_key": ConfigField(type=str,
-                                           default="sk-xxx",
-                                           description="OpenAI API密钥",
-                                           input_type="password",
-                                           hint="用于访问OpenAI嵌入模型的API密钥"),
-                    "model": ConfigField(type=str,
-                                         default="baai/bge-m3",
-                                         description="OpenAI嵌入模型名称",
-                                         hint="用于生成文本嵌入的OpenAI模型名称，例如：text-embedding-ada-002"),
-                    "base_url": ConfigField(type=str,
-                                            default="https://openrouter.ai/api/v1",
-                                            description="OpenAI API基础URL",
-                                            hint="如果你使用的是OpenAI的自定义部署或代理，请在此处指定基础URL"), },
-            "generic_cfg":
-                {
-                    "cron_interval": ConfigField(type=int,
-                                                 default=10,
-                                                 description="定时任务间隔（分钟）",
-                                                 min=1, max=1440,
-                                                 hint="定时任务执行的时间间隔，单位为分钟"),
-                    "dropout_rate": ConfigField(type=float,
-                                                default=0.3,
-                                                description="Dropout率",
-                                                min=0.0, max=1.0,
-                                                hint="查询时的Dropout率"),
-                    "min_edge_weight": ConfigField(type=float,
-                                                   default=0.2,
-                                                   description="最小边权重",
-                                                   min=0.0, max=1.0,
-                                                   hint="在图数据库中考虑的最小边权重"),
-                    "max_depth": ConfigField(type=int,
-                                             default=5,
-                                             description="最大深度",
-                                             min=1, max=20,
-                                             hint="在图数据库中搜索的最大深度"),
-                    "strengthen_boost": ConfigField(type=float,
-                                                    default=0.1,
-                                                    description="强化系数",
-                                                    min=0.0, max=1.0,
-                                                    hint="用于强化记忆连接的系数"),
-                    "similarity_threshold": ConfigField(type=float,
-                                                        default=0.75,
-                                                        description="相似度阈值",
-                                                        min=0.0, max=1.0,
-                                                        hint="在查询时考虑的最小相似度阈值"),
-                    "auto_link": ConfigField(type=bool,
-                                             default=True,
-                                             description="自动链接相邻Topics",
-                                             hint="是否自动链接相邻的主题以构建记忆图谱"),
-                }
-        }
+    config_schema = {
+        "postgresql": {
+            "host": ConfigField(
+                type=str,
+                default="localhost",
+                description="PostgreSQL服务器地址",
+                hint="你的PostgreSQL服务器地址，通常是localhost或IP地址",
+            ),
+            "port": ConfigField(
+                type=int,
+                default=5432,
+                description="PostgreSQL服务器端口",
+                min=1,
+                max=65535,
+                hint="你的PostgreSQL服务器端口，默认是5432",
+            ),
+            "user": ConfigField(
+                type=str, default="postgres", description="PostgreSQL用户名", hint="用于连接PostgreSQL数据库的用户名"
+            ),
+            "password": ConfigField(
+                type=str,
+                default="yourpassword",
+                description="PostgreSQL密码",
+                input_type="password",
+                hint="用于连接PostgreSQL数据库的密码",
+            ),
+            "database": ConfigField(
+                type=str,
+                default="pgvec_maimem_db",
+                description="PostgreSQL数据库名",
+                hint="用于存储记忆数据的数据库名称",
+            ),
+            "ssl": ConfigField(
+                type=bool,
+                default=False,
+                description="是否启用SSL连接",
+                hint="如果你的PostgreSQL服务器启用了SSL连接，请设置为True",
+            ),
+        },
+        "openai_embedding": {
+            "api_key": ConfigField(
+                type=str,
+                default="sk-xxx",
+                description="OpenAI API密钥",
+                input_type="password",
+                hint="用于访问OpenAI嵌入模型的API密钥",
+            ),
+            "model": ConfigField(
+                type=str,
+                default="baai/bge-m3",
+                description="OpenAI嵌入模型名称",
+                hint="用于生成文本嵌入的OpenAI模型名称，例如：text-embedding-ada-002",
+            ),
+            "base_url": ConfigField(
+                type=str,
+                default="https://openrouter.ai/api/v1",
+                description="OpenAI API基础URL",
+                hint="如果你使用的是OpenAI的自定义部署或代理，请在此处指定基础URL",
+            ),
+        },
+        "generic_cfg": {
+            "cron_interval": ConfigField(
+                type=int,
+                default=10,
+                description="定时任务间隔（分钟）",
+                min=1,
+                max=1440,
+                hint="定时任务执行的时间间隔，单位为分钟",
+            ),
+            "dropout_rate": ConfigField(
+                type=float, default=0.3, description="Dropout率", min=0.0, max=1.0, hint="查询时的Dropout率"
+            ),
+            "min_edge_weight": ConfigField(
+                type=float, default=0.2, description="最小边权重", min=0.0, max=1.0, hint="在图数据库中考虑的最小边权重"
+            ),
+            "max_depth": ConfigField(
+                type=int, default=5, description="最大深度", min=1, max=20, hint="在图数据库中搜索的最大深度"
+            ),
+            "strengthen_boost": ConfigField(
+                type=float, default=0.1, description="强化系数", min=0.0, max=1.0, hint="用于强化记忆连接的系数"
+            ),
+            "similarity_threshold": ConfigField(
+                type=float,
+                default=0.75,
+                description="相似度阈值",
+                min=0.0,
+                max=1.0,
+                hint="在查询时考虑的最小相似度阈值",
+            ),
+            "auto_link": ConfigField(
+                type=bool, default=True, description="自动链接相邻Topics", hint="是否自动链接相邻的主题以构建记忆图谱"
+            ),
+        },
+    }
 
     def get_plugin_components(self) -> List[Tuple[ComponentInfo, Type]]:
         global dbman, cron_task, config, initialized
@@ -130,7 +140,7 @@ class PgVecMemPlugin(BasePlugin):
                     user=self.get_config("postgresql.user"),
                     password=self.get_config("postgresql.password"),
                     database=self.get_config("postgresql.database"),
-                    ssl=self.get_config("postgresql.ssl")
+                    ssl=self.get_config("postgresql.ssl"),
                 )
                 config = db_mod.MemorySearchConfig(
                     dropout_rate=self.get_config("generic_cfg.dropout_rate"),
@@ -182,8 +192,8 @@ class ReadMem(BaseTool):
             raise RuntimeError("Database manager is not initialized yet.")
         result = await dbman.read_mem(function_args.get("query"), config)
         result = result[: function_args.get("limit")] if function_args.get("limit") else result
-        result_txt = ''
-        for (tp, inst) in result:
+        result_txt = ""
+        for tp, inst in result:
             result_txt += f"- Topic: {tp}, Content: {inst}\n"
         e = timeit.default_timer()
         res = ujson.dumps(

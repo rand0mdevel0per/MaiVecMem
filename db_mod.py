@@ -57,39 +57,50 @@ class GraphMemoryDB:
             topic_emb = await self._embed(topic)
 
             # 2. 检查或创建 Topic (复用逻辑保持不变，但SQL微调)
-            existing_topic = await self.conn.fetchrow("""
+            existing_topic = await self.conn.fetchrow(
+                """
                 SELECT id, topic_name, 
                        1 - (topic_embedding <=> $1) as similarity
                 FROM memory_topics
                 ORDER BY topic_embedding <=> $1
                 LIMIT 1
-            """, topic_emb.tolist())
+            """,
+                topic_emb.tolist(),
+            )
 
-            if existing_topic and existing_topic['similarity'] > 0.9:
-                topic_id = existing_topic['id']
+            if existing_topic and existing_topic["similarity"] > 0.9:
+                topic_id = existing_topic["id"]
                 # print(f"[INFO] Reusing existed topic: {existing_topic['topic_name']}")
             else:
-                topic_id = await self.conn.fetchval("""
+                topic_id = await self.conn.fetchval(
+                    """
                     INSERT INTO memory_topics (topic_name, topic_embedding)
                     VALUES ($1, $2)
                     RETURNING id
-                """, topic, topic_emb.tolist())
+                """,
+                    topic,
+                    topic_emb.tolist(),
+                )
 
                 if config.auto_link and existing_topic:
-                    similarity = existing_topic['similarity']
+                    similarity = existing_topic["similarity"]
                     if similarity > config.similarity_threshold:
-                        await self._create_edge(existing_topic['id'], topic_id, similarity)
+                        await self._create_edge(existing_topic["id"], topic_id, similarity)
 
             # 3. 批量处理 Instances (核心优化点)
 
             # A. 批量去重查询
             # 一次性查出该 Topic 下已存在的这些内容
-            existing_contents = await self.conn.fetch("""
+            existing_contents = await self.conn.fetch(
+                """
                 SELECT content FROM memory_instances 
                 WHERE topic_id = $1 AND content = ANY($2::text[])
-            """, topic_id, instances)
+            """,
+                topic_id,
+                instances,
+            )
 
-            existing_set = {r['content'] for r in existing_contents}
+            existing_set = {r["content"] for r in existing_contents}
             new_instances = [inst for inst in instances if inst not in existing_set]
 
             if not new_instances:
@@ -100,28 +111,25 @@ class GraphMemoryDB:
 
             # C. 准备批量插入数据
             instance_data = []
-            for content, content_emb in zip(new_instances, new_embeddings):
+            for content, content_emb in zip(new_instances, new_embeddings, strict=True):
                 # 计算与 Topic 的相关度 (Distance 越小越相关)
                 # Cosine Distance = 1 - Cosine Similarity
                 # 这里简单估算：直接用 1 - distance 作为相关度
                 dist = np.linalg.norm(topic_emb - content_emb)
                 relevance = max(0.0, 1.0 - float(dist / 2))  # 简单的归一化
 
-                instance_data.append((
-                    str(uuid.uuid4()),
-                    topic_id,
-                    content,
-                    content_emb.tolist(),
-                    float(relevance)
-                ))
+                instance_data.append((str(uuid.uuid4()), topic_id, content, content_emb.tolist(), float(relevance)))
 
             # D. 批量插入
             if instance_data:
-                await self.conn.executemany("""
+                await self.conn.executemany(
+                    """
                     INSERT INTO memory_instances 
                     (id, topic_id, content, content_embedding, relevance_score)
                     VALUES ($1, $2, $3, $4, $5)
-                """, instance_data)
+                """,
+                    instance_data,
+                )
 
             # print(f"[INFO] Added topic: {topic}, {len(instance_data)} instances")
             return True
@@ -130,10 +138,12 @@ class GraphMemoryDB:
             print(f"Error in add_mem: {e}")
             return False
 
-    async def batch_add_mem(self, batch: List[Tuple[str, List[str]]],
-                            config: Optional[MemorySearchConfig] = None) -> bool:
+    async def batch_add_mem(
+        self, batch: List[Tuple[str, List[str]]], config: Optional[MemorySearchConfig] = None
+    ) -> bool:
         """批量添加记忆"""
-        if not batch: return False
+        if not batch:
+            return False
         config = config or MemorySearchConfig()
 
         success_count = 0
@@ -146,17 +156,23 @@ class GraphMemoryDB:
 
     async def _create_edge(self, from_topic: str, to_topic: str, weight: float):
         """创建 topic 之间的边 (Upsert)"""
-        await self.conn.execute("""
+        await self.conn.execute(
+            """
             INSERT INTO topic_edges (from_topic, to_topic, weight)
             VALUES ($1, $2, $3)
             ON CONFLICT (from_topic, to_topic) 
             DO UPDATE SET weight = GREATEST(topic_edges.weight, $3)
-        """, from_topic, to_topic, weight)
+        """,
+            from_topic,
+            to_topic,
+            weight,
+        )
 
     # ========== 读取函数 ==========
 
-    async def read_mem(self, query: str, config: Optional[MemorySearchConfig] = None, top_k: int = 5) -> List[
-        Tuple[str, List[str]]]:
+    async def read_mem(
+        self, query: str, config: Optional[MemorySearchConfig] = None, top_k: int = 5
+    ) -> List[Tuple[str, List[str]]]:
         """
         读取记忆
         优化：使用 LATERAL JOIN 将 N+1 次查询压缩为 2 次 (Search + Fetch)
@@ -172,21 +188,26 @@ class GraphMemoryDB:
 
         # 提取前 top_k 的 topic IDs
         top_topics = relevant_topics[:top_k]
-        top_topic_ids = [t['id'] for t in top_topics]
+        top_topic_ids = [t["id"] for t in top_topics]
 
         # 建立 ID 到 Name 的映射，方便最后组装
-        topic_map = {t['id']: t['topic_name'] for t in top_topics}
+        topic_map = {t["id"]: t["topic_name"] for t in top_topics}
 
         # 2. 批量增强 Topic 活跃度 (一次更新)
-        await self.conn.execute("""
+        await self.conn.execute(
+            """
             UPDATE memory_topics 
             SET access_count = access_count + 1, last_accessed = NOW(), strength = LEAST(strength + $2, 1.0)
             WHERE id = ANY($1::text[])
-        """, top_topic_ids, config.strengthen_boost)
+        """,
+            top_topic_ids,
+            config.strengthen_boost,
+        )
 
         # 3. 超级 SQL：一次性抓取所有 Topic 下的最佳 Instances
         # 使用 LATERAL JOIN 对每个 topic 取 top 10
-        rows = await self.conn.fetch("""
+        rows = await self.conn.fetch(
+            """
             SELECT t.id as topic_id, i.content
             FROM unnest($1::text[]) WITH ORDINALITY t(id, ord)
             CROSS JOIN LATERAL (
@@ -197,12 +218,15 @@ class GraphMemoryDB:
                 LIMIT 10
             ) i
             ORDER BY t.ord
-        """, top_topic_ids, query_emb.tolist())
+        """,
+            top_topic_ids,
+            query_emb.tolist(),
+        )
 
         # 4. 在内存中组装结果
         results_map = {tid: [] for tid in top_topic_ids}
         for row in rows:
-            results_map[row['topic_id']].append(row['content'])
+            results_map[row["topic_id"]].append(row["content"])
 
         # 保持排序顺序返回
         final_results = []
@@ -212,19 +236,23 @@ class GraphMemoryDB:
 
         return final_results
 
-    async def _search_topics_with_dropout(self, query_emb: np.ndarray, config: MemorySearchConfig) -> List[
-        Dict[str, Any]]:
+    async def _search_topics_with_dropout(
+        self, query_emb: np.ndarray, config: MemorySearchConfig
+    ) -> List[Dict[str, Any]]:
         """使用 dropout 的图遍历搜索 topics"""
         # 1. 动态入口点
-        start_topics = await self.conn.fetch("""
+        start_topics = await self.conn.fetch(
+            """
             SELECT id, topic_name, strength, 1 - (topic_embedding <=> $1) as similarity
             FROM memory_topics
             ORDER BY topic_embedding <=> $1 LIMIT 3
-        """, query_emb.tolist())
+        """,
+            query_emb.tolist(),
+        )
 
         queue = deque()
         for topic in start_topics:
-            queue.append((topic['id'], 0, float(topic['similarity'])))
+            queue.append((topic["id"], 0, float(topic["similarity"])))
 
         visited = set()
         results = []
@@ -241,56 +269,74 @@ class GraphMemoryDB:
             visited.add(topic_id)
 
             # 获取 Topic 详情 (这里仍需单次查询，因为是 BFS 动态的)
-            topic = await self.conn.fetchrow("""
+            topic = await self.conn.fetchrow(
+                """
                 SELECT id, topic_name, strength, 1 - (topic_embedding <=> $1) as similarity
                 FROM memory_topics WHERE id = $2
-            """, query_emb.tolist(), topic_id)
+            """,
+                query_emb.tolist(),
+                topic_id,
+            )
 
-            if not topic: continue
+            if not topic:
+                continue
 
             # 综合打分
-            score = topic['similarity'] * topic['strength'] * path_strength
+            score = topic["similarity"] * topic["strength"] * path_strength
 
             topics_to_strengthen.append(topic_id)
 
             if score > 0.25:  # 稍微降低阈值，保证召回
-                results.append({
-                    'id': topic['id'],
-                    'topic_name': topic['topic_name'],
-                    'score': score,
-                    'strength': topic['strength']
-                })
+                results.append(
+                    {
+                        "id": topic["id"],
+                        "topic_name": topic["topic_name"],
+                        "score": score,
+                        "strength": topic["strength"],
+                    }
+                )
 
             # 获取边
-            edges = await self.conn.fetch("""
+            edges = await self.conn.fetch(
+                """
                 SELECT to_topic, weight FROM topic_edges
                 WHERE from_topic = $1 AND weight >= $2
                 ORDER BY weight DESC LIMIT 8
-            """, topic_id, config.min_edge_weight)
+            """,
+                topic_id,
+                config.min_edge_weight,
+            )
 
             for edge in edges:
-                if edge['weight'] < 0.5 and np.random.random() < config.dropout_rate:
+                if edge["weight"] < 0.5 and np.random.random() < config.dropout_rate:
                     continue
 
-                edges_to_update.append((topic_id, edge['to_topic']))
-                queue.append((edge['to_topic'], depth + 1, path_strength * edge['weight']))
+                edges_to_update.append((topic_id, edge["to_topic"]))
+                queue.append((edge["to_topic"], depth + 1, path_strength * edge["weight"]))
 
         # 批量写回状态
         if topics_to_strengthen:
-            await self.conn.execute("""
+            await self.conn.execute(
+                """
                 UPDATE memory_topics 
                 SET strength = LEAST(strength + $2, 1.0), last_accessed = NOW()
                 WHERE id = ANY($1::text[])
-            """, topics_to_strengthen, config.strengthen_boost * 0.5)  # 搜索引起的增强稍微弱一点
+            """,
+                topics_to_strengthen,
+                config.strengthen_boost * 0.5,
+            )  # 搜索引起的增强稍微弱一点
 
         if edges_to_update:
-            await self.conn.executemany("""
+            await self.conn.executemany(
+                """
                 UPDATE topic_edges 
                 SET weight = LEAST(weight + 0.02, 1.0), last_activated = NOW()
                 WHERE from_topic = $1 AND to_topic = $2
-            """, edges_to_update)
+            """,
+                edges_to_update,
+            )
 
-        return sorted(results, key=lambda x: x['score'], reverse=True)
+        return sorted(results, key=lambda x: x["score"], reverse=True)
 
     # ========== 维护任务 ==========
 
@@ -321,7 +367,7 @@ class GraphMemoryDB:
             )
         """)
 
-        print(f"[INFO] Importance scores updated via SQL.")
+        print("[INFO] Importance scores updated via SQL.")
 
     async def cron(self) -> bool:
         """定时维护任务"""
@@ -378,52 +424,64 @@ class GraphMemoryDB:
         # 按 topic 分组，找出实例数量少的 topics
         topic_counts = {}
         for inst in instances:
-            topic_counts[inst['topic_id']] = topic_counts.get(inst['topic_id'], 0) + 1
+            topic_counts[inst["topic_id"]] = topic_counts.get(inst["topic_id"], 0) + 1
 
         # 对小 topics 的 instances 进行重新聚类
-        small_topic_instances = [inst for inst in instances if topic_counts.get(inst['topic_id'], 0) < 3]
+        small_topic_instances = [inst for inst in instances if topic_counts.get(inst["topic_id"], 0) < 3]
 
         if len(small_topic_instances) < min_instances:
             return
 
-        embeddings = np.array([inst['content_embedding'] for inst in small_topic_instances])
+        embeddings = np.array([inst["content_embedding"] for inst in small_topic_instances])
 
-        clustering = DBSCAN(eps=0.3, min_samples=min_instances, metric='cosine').fit(embeddings)
+        clustering = DBSCAN(eps=0.3, min_samples=min_instances, metric="cosine").fit(embeddings)
 
         # 为每个簇创建新 topic
         for cluster_id in set(clustering.labels_):
             if cluster_id == -1:
                 continue
 
-            cluster_instances = [small_topic_instances[i] for i in range(len(small_topic_instances)) if
-                clustering.labels_[i] == cluster_id]
+            cluster_instances = [
+                small_topic_instances[i]
+                for i in range(len(small_topic_instances))
+                if clustering.labels_[i] == cluster_id
+            ]
 
             # 生成 topic 名称（使用最中心的实例）
-            center_content = cluster_instances[0]['content']
+            center_content = cluster_instances[0]["content"]
             topic_name = f"[INFO] Automatically discovered: {center_content[:30]}"
 
             # 创建新 topic 并重新分配 instances
             topic_emb = embeddings[clustering.labels_ == cluster_id].mean(axis=0)
 
-            new_topic_id = await self.conn.fetchval("""
+            new_topic_id = await self.conn.fetchval(
+                """
                 INSERT INTO memory_topics (topic_name, topic_embedding)
                 VALUES ($1, $2)
                 RETURNING id
-            """, topic_name, topic_emb.tolist())
+            """,
+                topic_name,
+                topic_emb.tolist(),
+            )
 
             # 更新 instances 的 topic_id
-            instance_ids = [inst['id'] for inst in cluster_instances]
-            await self.conn.execute("""
+            instance_ids = [inst["id"] for inst in cluster_instances]
+            await self.conn.execute(
+                """
                 UPDATE memory_instances
                 SET topic_id = $1
                 WHERE id = ANY($2::text[])
-            """, new_topic_id, instance_ids)
+            """,
+                new_topic_id,
+                instance_ids,
+            )
 
         print(f"[INFO] {len(set(clustering.labels_)) - 1} new topics discovered from clustering")
 
     async def _merge_similar_topics(self, threshold: float = 0.85):
         """合并过于相似的 topics"""
-        pairs = await self.conn.fetch("""
+        pairs = await self.conn.fetch(
+            """
             SELECT t1.id as id1, t1.topic_name as name1,
                    t2.id as id2, t2.topic_name as name2,
                    1 - (t1.topic_embedding <=> t2.topic_embedding) as similarity
@@ -433,34 +491,51 @@ class GraphMemoryDB:
               AND 1 - (t1.topic_embedding <=> t2.topic_embedding) > $1
             ORDER BY similarity DESC
             LIMIT 10
-        """, threshold)
+        """,
+            threshold,
+        )
 
         merged_count = 0
         for pair in pairs:
             # 合并：将 topic2 的 instances 移到 topic1
-            await self.conn.execute("""
+            await self.conn.execute(
+                """
                 UPDATE memory_instances
                 SET topic_id = $1
                 WHERE topic_id = $2
-            """, pair['id1'], pair['id2'])
+            """,
+                pair["id1"],
+                pair["id2"],
+            )
 
             # 更新边
-            await self.conn.execute("""
+            await self.conn.execute(
+                """
                 UPDATE topic_edges
                 SET to_topic = $1
                 WHERE to_topic = $2
-            """, pair['id1'], pair['id2'])
+            """,
+                pair["id1"],
+                pair["id2"],
+            )
 
-            await self.conn.execute("""
+            await self.conn.execute(
+                """
                 UPDATE topic_edges
                 SET from_topic = $1
                 WHERE from_topic = $2
-            """, pair['id1'], pair['id2'])
+            """,
+                pair["id1"],
+                pair["id2"],
+            )
 
             # 删除 topic2
-            await self.conn.execute("""
+            await self.conn.execute(
+                """
                 DELETE FROM memory_topics WHERE id = $1
-            """, pair['id2'])
+            """,
+                pair["id2"],
+            )
 
             merged_count += 1
 
@@ -508,12 +583,31 @@ class GraphMemoryDB:
             SELECT COUNT(*) FROM memory_instances
         """)
 
-        return {'nodes': [{'id': str(t['id']), 'label': t['topic_name'], 'strength': float(t['strength']),
-            'access_count': t['access_count'], 'instance_count': t['instance_count'],
-            'size': t['strength'] * (1 + np.log(1 + t['access_count']))} for t in topics], 'edges': [
-            {'source': str(e['from_topic']), 'target': str(e['to_topic']), 'weight': float(e['weight']),
-                'activation_count': e['activation_count']} for e in edges],
-            'stats': {'total_topics': stats['total_topics'], 'total_instances': total_instances,
-                'total_edges': len(edges), 'avg_topic_strength': float(stats['avg_topic_strength'] or 0)}}
-
-
+        return {
+            "nodes": [
+                {
+                    "id": str(t["id"]),
+                    "label": t["topic_name"],
+                    "strength": float(t["strength"]),
+                    "access_count": t["access_count"],
+                    "instance_count": t["instance_count"],
+                    "size": t["strength"] * (1 + np.log(1 + t["access_count"])),
+                }
+                for t in topics
+            ],
+            "edges": [
+                {
+                    "source": str(e["from_topic"]),
+                    "target": str(e["to_topic"]),
+                    "weight": float(e["weight"]),
+                    "activation_count": e["activation_count"],
+                }
+                for e in edges
+            ],
+            "stats": {
+                "total_topics": stats["total_topics"],
+                "total_instances": total_instances,
+                "total_edges": len(edges),
+                "avg_topic_strength": float(stats["avg_topic_strength"] or 0),
+            },
+        }

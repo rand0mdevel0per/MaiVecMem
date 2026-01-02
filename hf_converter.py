@@ -4,9 +4,9 @@ from typing import Optional, Any
 
 
 def convert_dataset_to_memory_json(
-        dataset: Any,  # 直接接收 dataset 对象 (datasets.Dataset)
-        output_file: str = "memory_data.json",
-        max_samples: Optional[int] = None
+    dataset: Any,  # 直接接收 dataset 对象 (datasets.Dataset)
+    output_file: str = "memory_data.json",
+    max_samples: Optional[int] = None,
 ):
     """
     通用转换函数：将 Dataset 对象转换为 topic-instance JSON 格式
@@ -26,7 +26,7 @@ def convert_dataset_to_memory_json(
         topic_col = cols[0]
         content_cols = cols[1:]
 
-        print(f"[INFO] Auto-detected columns:")
+        print("[INFO] Auto-detected columns:")
         print(f"   - Topic Col: [{topic_col}]")
         print(f"   - Content Col: {content_cols}")
 
@@ -73,7 +73,7 @@ def convert_dataset_to_memory_json(
     print(f"[INFO] Successfully processed {success_count} samples, skipped {skip_count} samples.")
     # 4. 保存为 JSON 文件
     try:
-        with open(output_file, 'w', encoding='utf-8') as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             json.dump(data_map, f, ensure_ascii=False, indent=2)
         print(f"[INFO] Data saved to {output_file}")
     except Exception as e:

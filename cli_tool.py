@@ -1,8 +1,7 @@
 import asyncio
 import tomllib
 import argparse
-from typing import Dict, Optional
-from pathlib import Path
+from typing import Dict, Any
 
 import asyncpg
 import ujson
@@ -18,8 +17,9 @@ def load_config(file_path: str) -> dict:
     return cfg
 
 
-async def load_dataset_from_json(dbman: db_mod.GraphMemoryDB, file_path: str,
-                                 memory_search_config: db_mod.MemorySearchConfig):
+async def load_dataset_from_json(
+    dbman: db_mod.GraphMemoryDB, file_path: str, memory_search_config: db_mod.MemorySearchConfig
+):
     """从JSON文件加载数据集到数据库"""
     json_raw: Dict[str, Any] = ujson.load(open(file_path, "r", encoding="utf-8"))
     batch = []
@@ -45,8 +45,7 @@ async def export_graph_memory(dbman: db_mod.GraphMemoryDB, export_path: str):
     print(f"[INFO] Graph memory exported to '{export_path}' successfully.")
 
 
-async def search_memory(dbman: db_mod.GraphMemoryDB, query: str,
-                        memory_search_config: db_mod.MemorySearchConfig):
+async def search_memory(dbman: db_mod.GraphMemoryDB, query: str, memory_search_config: db_mod.MemorySearchConfig):
     """搜索记忆"""
     results = await dbman.read_mem(query, memory_search_config)
     print(f"[INFO] Search results for query '{query}':")
@@ -76,6 +75,7 @@ async def interactive_mode(dbman: db_mod.GraphMemoryDB, memory_search_config: db
             await initialize_database(dbman.db_conn)
         elif option == "2":
             import datasets
+
             dataset_name = input("Enter HuggingFace dataset name (e.g., 'ag_news'): ").strip()
             if not dataset_name:
                 print("Dataset name cannot be empty.")
@@ -87,7 +87,7 @@ async def interactive_mode(dbman: db_mod.GraphMemoryDB, memory_search_config: db
             print(f"Available configurations for '{dataset_name}':")
             for idx, cfg in enumerate(dataset_cfgs):
                 print(f"[{idx}] {cfg}")
-            cfg_option = input(f"Select configuration (0-{len(dataset_cfgs)-1}) or press ENTER for default: ").strip()
+            cfg_option = input(f"Select configuration (0-{len(dataset_cfgs) - 1}) or press ENTER for default: ").strip()
             if cfg_option.isdigit() and 0 <= int(cfg_option) < len(dataset_cfgs):
                 selected_cfg = dataset_cfgs[int(cfg_option)]
             else:
@@ -95,7 +95,9 @@ async def interactive_mode(dbman: db_mod.GraphMemoryDB, memory_search_config: db
             print(f"[INFO] Loading dataset '{dataset_name}' with configuration '{selected_cfg}'...")
             dataset_raw = datasets.load_dataset(dataset_name, selected_cfg, split="train")
             max_samples = input("Enter maximum number of samples to load (or press ENTER for all): ").strip()
-            await hf_converter.convert_dataset_to_memory_json(dataset_raw, "tmp_dataset.json", int(max_samples) if max_samples.isdigit() else None)
+            await hf_converter.convert_dataset_to_memory_json(
+                dataset_raw, "tmp_dataset.json", int(max_samples) if max_samples.isdigit() else None
+            )
             await load_dataset_from_json(dbman, "tmp_dataset.json", memory_search_config)
             print(f"[INFO] Dataset '{dataset_name}' loaded successfully.")
         elif option == "3":
@@ -133,7 +135,7 @@ async def setup_database_manager(cfg: dict) -> db_mod.GraphMemoryDB:
         user=cfg["postgresql"]["user"],
         password=cfg["postgresql"]["password"],
         database=cfg["postgresql"]["database"],
-        ssl=cfg["postgresql"].get("ssl", False)
+        ssl=cfg["postgresql"].get("ssl", False),
     )
 
     memory_search_config = db_mod.MemorySearchConfig(
@@ -145,25 +147,28 @@ async def setup_database_manager(cfg: dict) -> db_mod.GraphMemoryDB:
         auto_link=cfg["generic_cfg"]["auto_link"],
     )
 
-    return db_mod.GraphMemoryDB(
-        cfg["openai_embedding"]["base_url"],
+    return (
+        db_mod.GraphMemoryDB(
+            cfg["openai_embedding"]["base_url"],
+            db_conn,
+            cfg["openai_embedding"]["api_key"],
+            cfg["openai_embedding"]["model"],
+        ),
+        memory_search_config,
         db_conn,
-        cfg["openai_embedding"]["api_key"],
-        cfg["openai_embedding"]["model"],
-    ), memory_search_config, db_conn
+    )
 
 
 def parse_arguments():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
-        description="MaiBot Postgresql Memory Plugin Cli Tool",
-        formatter_class=argparse.RawTextHelpFormatter
+        description="MaiBot Postgresql Memory Plugin Cli Tool", formatter_class=argparse.RawTextHelpFormatter
     )
 
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
     # init 命令
-    init_parser = subparsers.add_parser("init", help="初始化数据库结构")
+    subparsers.add_parser("init", help="初始化数据库结构")
 
     # import 命令
     import_parser = subparsers.add_parser("import", help="导入知识库 JSON 文件")
