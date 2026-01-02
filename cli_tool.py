@@ -21,6 +21,15 @@ import numpy as np
 from . import db_mod, hf_converter
 from . import libopenie
 
+# try to import secret_store decrypt helper
+try:
+    from .secret_store import decrypt_for_service, key_available as secret_key_available
+except Exception:
+    decrypt_for_service = None
+
+    def secret_key_available():
+        return False
+
 
 # Prefer ujson for speed but fall back to stdlib json if unavailable
 try:
@@ -455,7 +464,8 @@ async def setup_database_manager(cfg: dict) -> db_mod.GraphMemoryDB:
     emb_model = cfg["openai_embedding"]["model"]
     if os.path.exists(model_info_path):
         try:
-            mi = ujson.load(open(model_info_path, "r", encoding="utf-8"))
+            with open(model_info_path, "r", encoding="utf-8") as mf:
+                mi = ujson.load(mf)
             pit = mi.get("plugin_config_snapshot", {}).get("openai_embedding", {})
             emb_base = pit.get("base_url") or emb_base
             emb_key = pit.get("api_key") or emb_key

@@ -13,6 +13,8 @@ import subprocess
 import shutil
 from typing import List, Tuple, Type, Dict, Any
 
+from .secret_store import encrypt_for_service, key_available  # moved up to top-level imports  # noqa: E402
+
 # attempt to import plugin management wrapper for hot reload
 try:
     from . import plugin_manage_wrapper as _pmw
@@ -28,6 +30,7 @@ if target_path not in sys.path:
     sys.path.insert(0, target_path)
 
 from src.plugin_system import BasePlugin, register_plugin, ComponentInfo, ConfigField, BaseTool, config_api  # noqa: E402
+
 
 dbman = None
 cron_task = None
@@ -508,24 +511,42 @@ class PgVecMemPlugin(BasePlugin):
                                     for m in g.get("models", [])
                                 ]
                                 global_snapshot["api_providers"] = [
-                                    {"name": p.get("name"), "base_url": p.get("base_url")}
-                                    for p in g.get("api_providers", [])
+                                    {"name": p.get("name"), "base_url": p.get("base_url")} for p in g.get("api_providers", [])
                                 ]
                             except Exception:
                                 global_snapshot = {}
+
+                            # Prepare plugin_config_snapshot: encrypt api_key if possible
+                            plugin_cfg_snap = {
+                                "openai_embedding": {
+                                    "model": model_id,
+                                    "base_url": model_burl,
+                                }
+                            }
+                            try:
+                                if model_sk:
+                                    if key_available():
+                                        try:
+                                            enc = encrypt_for_service(model_sk)
+                                            plugin_cfg_snap["openai_embedding"]["api_key_encrypted"] = enc
+                                            plugin_cfg_snap["openai_embedding"]["api_key_masked"] = model_sk[:4] + "..." + model_sk[-4:]
+                                        except Exception as e:
+                                            # fallback to not storing key
+                                            plugin_cfg_snap["openai_embedding"]["api_key"] = None
+                                            print(f"[WARN] Failed to encrypt api_key for model_info.json: {e}")
+                                    else:
+                                        # no key storage available; avoid writing cleartext API key
+                                        plugin_cfg_snap["openai_embedding"]["api_key"] = None
+                                        print("[WARN] secret_store unavailable; model_info.json will not contain api_key")
+                            except Exception:
+                                pass
 
                             model_info = {
                                 "model": probe.get("model"),
                                 "dimension": probe.get("dimension"),
                                 "raw": probe.get("raw"),
                                 "checked_at": int(time.time()),
-                                "plugin_config_snapshot": {
-                                    "openai_embedding": {
-                                        "model": model_id,
-                                        "base_url": model_burl,
-                                        "api_key": model_sk,  # included so CLI can reuse credentials
-                                    }
-                                },
+                                "plugin_config_snapshot": plugin_cfg_snap,
                                 "global_config_excerpt": global_snapshot,
                             }
                             try:
