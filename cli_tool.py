@@ -115,37 +115,79 @@ async def search_memory(dbman: db_mod.GraphMemoryDB, query: str, memory_search_c
 
 
 async def interactive_mode(dbman: db_mod.GraphMemoryDB, memory_search_config: db_mod.MemorySearchConfig):
-    """交互式模式"""
+    """Interactive mode (ASCII-only English prompts)
+
+    Reordered options for a more logical workflow.
+    """
     while True:
-        print("""
-        MaiBot Postgresql Memory Plugin Cli Tool
-        ==================================================================
-        [1] Initialize Graph Memory Tables
-        [2] Load Dataset from HuggingFace
-        [3] Load Dataset from Local .json File
-        [4] Test Memory Search
-        [5] Manually Add Memory Entry
-        [6] Export Graph Memory to JSON
-        [7] Import Data from OpenIE JSON (xxx-openie.json)
-        [8] Import Batched Data from OpenIE JSON Directory (xxx/*-openie.json)
-        [0] Exit
-        ==================================================================
-        """)
-        option = input("Please select an option (0-8): ").strip()
+        print(
+            "\nMaiVecMem CLI - Interactive Menu\n========================================\n[1] Initialize graph memory tables\n[2] Import OpenIE directory (batch)\n[3] Import OpenIE file (single)\n[4] Load dataset from HuggingFace\n[5] Load dataset from local JSON file\n[6] Test memory search\n[7] Manually add memory entry\n[8] Export graph memory to JSON\n[0] Exit\n========================================"
+        )
+        option = input("Select an option (0-8): ").strip()
+
         if option == "1":
             await initialize_database(dbman.db_conn, cfg=None)
         elif option == "2":
+            dir_path = input("Enter directory path containing OpenIE JSON files: ").strip()
+            strategy = input("Strategy (subject/relation/hybrid/semantic/entity) [semantic]: ").strip() or "semantic"
+            min_inst = None
+            if strategy == "hybrid":
+                v = input("min_instances for hybrid (default 2): ").strip()
+                min_inst = int(v) if v.isdigit() else 2
+            kw = {}
+            if strategy == "semantic":
+                v = input("similarity_threshold (0.0-1.0, default 0.7): ").strip()
+                try:
+                    simt = float(v) if v else 0.7
+                except Exception:
+                    simt = 0.7
+                kw = {
+                    "similarity_threshold": simt,
+                    "min_instances": int(input("min_instances for clusters (default 1): ").strip() or 1),
+                }
+            else:
+                if min_inst is not None:
+                    kw["min_instances"] = min_inst
+
+            if not os.path.isdir(dir_path):
+                print(f"[ERROR] Directory not found: {dir_path}")
+            else:
+                for fname in sorted(os.listdir(dir_path)):
+                    if fname.endswith("-openie.json"):
+                        fpath = os.path.join(dir_path, fname)
+                        print(f"[INFO] Importing from '{fpath}'...")
+                        await load_openie_to_db(dbman, fpath, memory_search_config, strategy=strategy, **kw)
+        elif option == "3":
+            file_path = input("Enter OpenIE JSON file path: ").strip()
+            strategy = input("Strategy (subject/relation/hybrid/semantic/entity) [semantic]: ").strip() or "semantic"
+            if strategy == "hybrid":
+                mi = input("min_instances for hybrid (default 2): ").strip()
+                kw = {"min_instances": int(mi) if mi.isdigit() else 2}
+            elif strategy == "semantic":
+                v = input("similarity_threshold (0.0-1.0, default 0.7): ").strip()
+                try:
+                    simt = float(v) if v else 0.7
+                except Exception:
+                    simt = 0.7
+                kw = {
+                    "similarity_threshold": simt,
+                    "min_instances": int(input("min_instances for clusters (default 1): ").strip() or 1),
+                }
+            else:
+                kw = {}
+            await load_openie_to_db(dbman, file_path, memory_search_config, strategy=strategy, **kw)
+        elif option == "4":
             import datasets
 
-            dataset_name = input("Enter HuggingFace dataset name (e.g., 'ag_news'): ").strip()
+            dataset_name = input("Enter HuggingFace dataset name (e.g., ag_news): ").strip()
             if not dataset_name:
-                print("Dataset name cannot be empty.")
+                print("[ERROR] Dataset name cannot be empty.")
                 continue
             dataset_cfgs = datasets.get_dataset_config_names(dataset_name)
             if not dataset_cfgs:
                 print(f"[ERROR] Dataset '{dataset_name}' not found on HuggingFace.")
                 continue
-            print(f"Available configurations for '{dataset_name}':")
+            print("Available configurations:")
             for idx, cfg in enumerate(dataset_cfgs):
                 print(f"[{idx}] {cfg}")
             cfg_option = input(f"Select configuration (0-{len(dataset_cfgs) - 1}) or press ENTER for default: ").strip()
@@ -153,7 +195,7 @@ async def interactive_mode(dbman: db_mod.GraphMemoryDB, memory_search_config: db
                 selected_cfg = dataset_cfgs[int(cfg_option)]
             else:
                 selected_cfg = None
-            print(f"[INFO] Loading dataset '{dataset_name}' with configuration '{selected_cfg}'...")
+            print(f"[INFO] Loading dataset '{dataset_name}' config='{selected_cfg}'...")
             dataset_raw = datasets.load_dataset(dataset_name, selected_cfg, split="train")
             max_samples = input("Enter maximum number of samples to load (or press ENTER for all): ").strip()
             await hf_converter.convert_dataset_to_memory_json(
@@ -161,74 +203,26 @@ async def interactive_mode(dbman: db_mod.GraphMemoryDB, memory_search_config: db
             )
             await load_dataset_from_json(dbman, "tmp_dataset.json", memory_search_config)
             print(f"[INFO] Dataset '{dataset_name}' loaded successfully.")
-        elif option == "3":
+        elif option == "5":
             file_path = input("Enter local JSON file path: ").strip()
             await load_dataset_from_json(dbman, file_path, memory_search_config)
             print(f"[INFO] Dataset from '{file_path}' loaded successfully.")
-        elif option == "4":
+        elif option == "6":
             query = input("Enter search query: ").strip()
             await search_memory(dbman, query, memory_search_config)
-        elif option == "5":
+        elif option == "7":
             topic = input("Enter memory topic: ").strip()
             content = []
             while True:
-                line = input("Enter memory content line (Press ENTER without input to break): ").strip()
+                line = input("Enter memory content line (empty line to finish): ").strip()
                 if line == "":
                     break
                 content.append(line)
             await dbman.add_mem(topic, content, memory_search_config)
             print(f"[INFO] Memory entry added under topic '{topic}'.")
-        elif option == "6":
+        elif option == "8":
             export_path = input("Enter export JSON file path: ").strip()
             await export_graph_memory(dbman, export_path)
-        elif option == "7":
-            file_path = input("Enter OpenIE JSON file path: ").strip()
-            strat = input("Strategy (subject/relation/hybrid/semantic/entity) [semantic]: ").strip() or "semantic"
-            min_inst = None
-            if strat == "hybrid":
-                v = input("min_instances for hybrid (default 2): ").strip()
-                min_inst = int(v) if v.isdigit() else 2
-            if strat == "semantic":
-                v = input("similarity_threshold (0.0-1.0, default 0.7): ").strip()
-                try:
-                    simt = float(v) if v else 0.7
-                except Exception:
-                    simt = 0.7
-                kw = {
-                    "similarity_threshold": simt,
-                    "min_instances": int(input("min_instances for clusters (default 1): ").strip() or 1),
-                }
-            else:
-                kw = {}
-                if min_inst is not None:
-                    kw["min_instances"] = min_inst
-            await load_openie_to_db(dbman, file_path, memory_search_config, strategy=strat, **kw)
-        elif option == "8":
-            dir_path = input("Enter directory path containing OpenIE JSON files: ").strip()
-            strat = input("Strategy (subject/relation/hybrid/semantic/entity) [semantic]: ").strip() or "semantic"
-            min_inst = None
-            if strat == "hybrid":
-                v = input("min_instances for hybrid (default 2): ").strip()
-                min_inst = int(v) if v.isdigit() else 2
-            if strat == "semantic":
-                v = input("similarity_threshold (0.0-1.0, default 0.7): ").strip()
-                try:
-                    simt = float(v) if v else 0.7
-                except Exception:
-                    simt = 0.7
-                kw = {
-                    "similarity_threshold": simt,
-                    "min_instances": int(input("min_instances for clusters (default 1): ").strip() or 1),
-                }
-            else:
-                kw = {}
-                if min_inst is not None:
-                    kw["min_instances"] = min_inst
-            for fname in os.listdir(dir_path):
-                if fname.endswith("-openie.json"):
-                    fpath = os.path.join(dir_path, fname)
-                    print(f"[INFO] Importing from '{fpath}'...")
-                    await load_openie_to_db(dbman, fpath, memory_search_config, strategy=strat, **kw)
         elif option == "0":
             print("Exiting interactive mode.")
             break

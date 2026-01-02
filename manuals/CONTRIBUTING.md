@@ -136,3 +136,32 @@ pytest -q
 
 在贡献过程中遇到问题，请在仓库中提交 Issue，或直接在 PR 中标注需要帮助的地方。感谢你的贡献！
 
+
+## Staging branch and PR workflow (staging-<commit-id>)
+
+When a commit needs to be promoted to the release channel, we use a temporary staging branch named `staging-<commit-id>` where `<commit-id>` is the short commit hash (7 chars) that contains the changes to be staged. This allows review and additional CI runs before merging into `rel`.
+
+Typical steps (local):
+
+1. Recover or create the staging branch from a specific commit (useful if the commit was inadvertently reset):
+
+```powershell
+# Create a branch pointing to the desired commit
+git checkout -b staging-<commit-id> <commit-id>
+
+# Push the new branch to origin
+git push origin staging-<commit-id>
+```
+
+2. Open a PR to `rel` using GitHub CLI (`gh`). Example:
+
+```powershell
+# Create a PR from staging-<commit-id> into rel
+gh pr create --base rel --head staging-<commit-id> --title "staging: restore <commit-id>" --body "Restore commit <commit-id> and run validation CI"
+```
+
+3. After CI and review, merge the PR to `rel`. Optionally tag a release.
+
+Notes:
+- If the commit was present in your reflog (for example after a reset), the command in step 1 recovers it.
+- If `gh` is not installed or authenticated, you can still create the PR via the GitHub web UI pointing head=`staging-<commit-id>` and base=`rel`.

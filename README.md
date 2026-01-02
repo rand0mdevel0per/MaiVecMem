@@ -104,7 +104,7 @@ MaiVecMem 使用以下 JSON 格式来表示要导入的主题和上下文：
 
 ### OpenIE 导入说明
 
-- `import-openie` / `import-openie-dir` 复用 `plugins/MaiVecMem/libopenie.py` 中的转换逻辑。
+- `import-openie` / `import-openie-dir` 复用 `libopenie.py` 中的转换逻辑。
 - 非 `semantic` 策略（如 `subject`/`relation`/`hybrid`）会直接调用转换器生成 topic->instances map 并逐批写入 DB。
 - `semantic` 策略会使用 embedding 来做聚类；embedding 凭据必须来自 `model_info.json` 中的 `plugin_config_snapshot.openai_embedding`（或可由 CLI 所在的环境覆盖）。
 
@@ -120,7 +120,7 @@ MaiVecMem 使用以下 JSON 格式来表示要导入的主题和上下文：
 
 ## 贡献（简短）
 
-欢迎提交 Issue 与 Pull Request；插件代码位于 `plugins/MaiVecMem/`。更详细的贡献指南请查看 `manuals/CONTRIBUTING.md`。
+欢迎提交 Issue 与 Pull Request；插件代码位于 `MaiVecMem/`。更详细的贡献指南请查看 `manuals/CONTRIBUTING.md`。
 
 ## 联系方式
 
