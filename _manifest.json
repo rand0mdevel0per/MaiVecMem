@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "PgVector 记忆插件",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "一个使用 PostgreSQL & PgVector Plugin 数据库存储和检索记忆的插件。",
   "author": {
     "name": "rand0mdevel0per",
