@@ -52,7 +52,12 @@ def main():
         print("No update_available.json found. Nothing to do.")
         return
 
-    info = ujson.load(open(ua_path, "r", encoding="utf-8"))
+    try:
+        with open(ua_path, "r", encoding="utf-8") as f:
+            info = ujson.load(f)
+    except Exception as e:
+        print(f"Failed to read update_available.json: {e}")
+        return
     print("Update info:")
     print(ujson.dumps(info, indent=2, ensure_ascii=False))
 

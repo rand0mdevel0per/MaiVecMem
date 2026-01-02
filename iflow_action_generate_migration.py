@@ -111,7 +111,8 @@ def main(change_desc: str = "auto-migration"):
     # Run iflow in --yolo mode and instruct it to write files to disk
     iflow_cmd = ["iflow", "--yolo", "-p", prompt]
     print("Invoking iflow --yolo to generate migration and action marker (model will write files)")
-    proc = subprocess.run(iflow_cmd, cwd=PLUGIN_DIR, env=os.env, capture_output=True, text=True)
+    # Use current environment; avoid passing an invalid name 'os.env'
+    proc = subprocess.run(iflow_cmd, cwd=PLUGIN_DIR, env=os.environ, capture_output=True, text=True)
     print("iflow stdout:")
     print(proc.stdout)
     if proc.returncode != 0:
@@ -131,12 +132,14 @@ def main(change_desc: str = "auto-migration"):
             "new_version": None,
             "merge_rel": False,
         }
-        ujson.dump(marker, open(ACTION_MARKER, "w", encoding="utf-8"))
+        with open(ACTION_MARKER, "w", encoding="utf-8") as mf:
+            ujson.dump(marker, mf)
 
     # After iflow returns, read the marker file if present
     if os.path.exists(ACTION_MARKER):
         try:
-            marker = ujson.load(open(ACTION_MARKER, "r", encoding="utf-8"))
+            with open(ACTION_MARKER, "r", encoding="utf-8") as mf:
+                marker = ujson.load(mf)
         except Exception as e:
             print(f"Failed to read marker file: {e}")
             marker = None
@@ -148,15 +151,30 @@ def main(change_desc: str = "auto-migration"):
         migration_file = marker.get("migration_file")
         commit_message = marker.get("commit_message") or f"Add migration - {int(time.time())}"
         bump_version = bool(marker.get("bump_version"))
-        marker.get("new_version")
+        new_version = marker.get("new_version")
         merge_rel = bool(marker.get("merge_rel"))
+
+        # If requested, update local manifest version atomically
+        if bump_version and new_version and os.path.exists(MANIFEST):
+            try:
+                with open(MANIFEST, "r", encoding="utf-8") as mf:
+                    manifest = ujson.load(mf)
+                # update version field and write back
+                manifest["version"] = new_version
+                with open(MANIFEST, "w", encoding="utf-8") as mf:
+                    ujson.dump(manifest, mf, ensure_ascii=False, indent=2)
+                print(f"[INFO] Updated manifest version to {new_version}")
+            except Exception as e:
+                print(f"[WARN] Failed to update manifest version: {e}")
 
         files_to_commit = []
         if migration_file:
             files_to_commit.append(migration_file)
-        # If manifest was modified (if model wrote new manifest), include it
-        if bump_version and os.path.exists(MANIFEST):
-            files_to_commit.append(os.path.relpath(MANIFEST, PLUGIN_DIR))
+        # If manifest was modified, include it
+        if os.path.exists(MANIFEST):
+            # Include manifest if bump_version requested or if the marker explicitly indicated manifest change
+            if bump_version or (marker.get("manifest_changed") is True):
+                files_to_commit.append(os.path.relpath(MANIFEST, PLUGIN_DIR))
 
         try:
             git_commit_and_push(files_to_commit, branch="migration-scripts", commit_message=commit_message)

@@ -67,7 +67,11 @@ class GraphMemoryDB:
         if not input_data:
             return [] if isinstance(input_data, list) else np.array([])
 
-        resp = self.embedder.embeddings.create(input=input_data, model=self.emb_model, timeout=30)
+        # Run blocking SDK call in a thread to avoid blocking asyncio event loop
+        def _call_embed():
+            return self.embedder.embeddings.create(input=input_data, model=self.emb_model, timeout=30)
+
+        resp = await asyncio.to_thread(_call_embed)
 
         if isinstance(input_data, str):
             return np.array(resp.data[0].embedding)
