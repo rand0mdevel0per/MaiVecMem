@@ -4,7 +4,6 @@ typing
 asyncpg
 numpy
 openai
-timeit
 ujson
 cryptography
 keyring
