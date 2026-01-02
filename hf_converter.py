@@ -64,7 +64,7 @@ def convert_dataset_to_memory_json(
             topic_str = str(topic_val).strip()
 
             if topic_str:
-                data_map[topic_str].append(content_val)
+                data_map[topic_str] += content_parts
                 success_count += 1
             else:
                 skip_count += 1
