@@ -1,89 +1,51 @@
-# MaiVecMem
+MaiVecMem plugin — developer notes
 
-MaiVecMem 是 [MaiBot](https://github.com/Mai-with-u/MaiBot) 的一个附属插件，用于向量化的记忆存储和检索。
+What this plugin adds
+- Probes embedding model on plugin init and writes `model_info.json` with metadata (model, dimension, plugin_config_snapshot, global_config_excerpt).
+- Background update checker that compares `rel/_manifest.json` and `schema.sql`, fetches migration scripts from `migration-scripts/sql/<commit>.sql`, and writes `update_available.json`.
+- Optional `generic_cfg.auto_update` to auto-apply updates (disabled by default). Auto-apply backs up plugin dir, pulls, attempts migration, and tries hot-reload.
+- CLI `plugins/MaiVecMem/cli_tool.py` reads `model_info.json` and generates `schema.generated.sql` used to initialize DB.
+- `apply_update.py` helper script to apply updates manually (with `--auto` to apply).
+- `iflow_action_generate_migration.py` calls `iflow --yolo` to let the model write migration SQL and a marker file; the script then commits/pushes/merges as instructed by the marker.
 
-## 功能特点
+Quick usage
 
-- 基于 PostgreSQL 的向量化存储
-- 高效的记忆检索功能
-- 支持 CLI 工具进行数据库管理
+1) Let plugin probe and write model info (plugin init in host application)
+   - Ensure your host loads the plugin so `plugin.get_plugin_components()` runs.
+   - After probe, check `plugins/MaiVecMem/model_info.json`.
 
-## 目录结构
+2) Generate schema and init DB (CLI)
+   - The CLI reads `model_info.json` and writes `schema.generated.sql`:
+     ```powershell
+     python .\plugins\MaiVecMem\cli_tool.py init
+     ```
+   - If you want to apply changes without DB execution, see `tests/test_schema_generation.py`.
 
-```
-MaiVecMem/
-├── cli_tool.py     # 命令行工具
-├── db_mod.py       # 数据库操作模块
-├── hf_converter.py # 向量化转换器
-├── plugin.py       # 插件主程序
-├── schema.sql      # 数据库结构定义
-├── README.md       # 说明文档
-├── LICENSE         # MIT 许可证
-└── manuals/        # 使用手册目录
-    ├── postgresql_installation.md  # PostgreSQL 安装教程
-    └── postgresql_configuration.md  # PostgreSQL 配置教程
-```
+3) Create migration using iflow
+   - Make sure `iflow` is installed and accessible in PATH and model credentials are set (or present in `model_info.json`).
+   - Run:
+     ```powershell
+     python .\plugins\MaiVecMem\iflow_action_generate_migration.py --desc "add new column"
+     ```
+   - The model will write files under the plugin directory and create `migration_action.json` to instruct the script what to commit/push.
 
-## 安装说明
+4) Apply updates (manual)
+   - Inspect `plugins/MaiVecMem/update_available.json` then run:
+     ```powershell
+     python .\plugins\MaiVecMem\apply_update.py --auto --plugin-dir .\plugins\MaiVecMem
+     ```
 
-1. 确保已安装 PostgreSQL 数据库
-2. 创建一个新的数据库用于存储向量化记忆
-3. 执行 `schema.sql` 文件初始化数据库结构
-4. 在 `plugin.py` 中配置数据库连接信息
+Developer test: generate schema without Postgres
+- There's a lightweight test harness: `tests/test_schema_generation.py` which creates a fake `model_info.json` and uses a fake DB connection to test schema generation and writing `schema.generated.sql`.
 
-详细的 PostgreSQL 安装和配置教程请参考 `manuals` 目录下的文档。
+Security notes
+- `model_info.json` currently contains `api_key` in `plugin_config_snapshot.openai_embedding` so CLI tools can reuse it. If you prefer to avoid storing secrets on disk, set OPENAI_API_KEY in the environment and remove the key from `model_info.json`.
 
-## 使用说明
+Files to review
+- `plugins/MaiVecMem/plugin.py` (probe + background update logic)
+- `plugins/MaiVecMem/cli_tool.py` (CLI init reads model_info.json)
+- `plugins/MaiVecMem/apply_update.py` (apply helper + hot-reload)
+- `plugins/MaiVecMem/iflow_action_generate_migration.py` (iflow-driven migration generator)
 
-### CLI 工具使用
+If you want, I can add an automated unit test suite (pytest) that mocks network, OpenAI, and git interactions.
 
-MaiVecMem 提供了命令行工具 `cli_tool.py` 来管理数据库：
-
-```bash
-python cli_tool.py [命令] [参数]
-```
-
-可用命令：
-- `init`: 初始化数据库结构
-- `import [文件路径]`: 导入知识库 JSON 文件
-- `search [关键词]`: 搜索相关记忆
-- `export [文件路径]`: 导出数据库内容到 JSON 文件
-
-### 知识库 JSON 格式
-
-MaiVecMem 使用标准的 JSON 格式存储知识库：
-
-```json
-{
-  "topic1": ["ctx1", "ctx2"],
-  "topic2": ["ctx1", "ctx2", "ctx3"]
-}
-```
-
-其中：
-- 键（如 `topic1`, `topic2`）表示主题名称
-- 值是一个字符串数组，包含该主题相关的上下文内容
-
-### 示例
-
-导入知识库：
-```bash
-python cli_tool.py import knowledge_base.json
-```
-
-搜索相关记忆：
-```bash
-python cli_tool.py search "关键词"
-```
-
-## 许可证
-
-本项目采用 [MIT License](LICENSE) 许可证。
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 联系方式
-
-如有问题，请在 GitHub 上创建 Issue。

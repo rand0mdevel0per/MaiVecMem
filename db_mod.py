@@ -6,6 +6,7 @@ from typing import List, Tuple, Optional, Dict, Any, Union
 import asyncpg
 import numpy as np
 import openai
+import asyncio
 
 
 @dataclass
@@ -16,6 +17,39 @@ class MemorySearchConfig:
     strengthen_boost: float = 0.1
     similarity_threshold: float = 0.75  # topic 相似度阈值
     auto_link: bool = True  # 自动链接相似 topic
+
+
+async def probe_model_info(base_url: str, api_key: str, model: str, timeout: int = 10) -> Dict[str, Any]:
+    """
+    Probe the embedding API to discover the embedding vector dimension.
+    This runs the (blocking) OpenAI client call in a threadpool to avoid blocking the event loop.
+
+    Returns a dict like: {"model": model, "dimension": 1536, "raw_model": {...}} on success,
+    or {"error": "..."} on failure. Always non-exceptional (caller should handle errors).
+    """
+    asyncio.get_event_loop()
+
+    def _call():
+        client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        # use a tiny probe input to force the provider to return an embedding
+        resp_ = client.embeddings.create(input=["probe"], model=model, timeout=timeout)
+        return resp_
+
+    try:
+        # run the blocking SDK call in a threadpool
+        resp = await asyncio.to_thread(_call)
+        # Safely access embedding length
+        if not getattr(resp, "data", None) or not getattr(resp.data[0], "embedding", None):
+            return {"error": "no_embedding_returned"}
+        emb = resp.data[0].embedding
+        dim = len(emb)
+        raw_model = {}
+        # try to pick model info from response if present
+        if hasattr(resp, "model"):
+            raw_model["model"] = resp.model
+        return {"model": model, "dimension": dim, "raw": raw_model}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 class GraphMemoryDB:

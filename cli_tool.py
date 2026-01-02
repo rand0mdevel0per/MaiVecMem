@@ -5,9 +5,10 @@ from typing import Dict, Any
 
 import asyncpg
 import ujson
+import re
+import os
 
-import db_mod
-import hf_converter
+from . import db_mod, hf_converter
 
 
 def load_config(file_path: str) -> dict:
@@ -28,13 +29,69 @@ async def load_dataset_from_json(
     await dbman.batch_add_mem(batch, memory_search_config)
 
 
-async def initialize_database(db_conn: asyncpg.Connection):
-    """初始化数据库表结构"""
-    with open("./schema.sql", "r", encoding="utf-8") as f:
+async def initialize_database(db_conn: asyncpg.Connection, cfg: Dict[str, Any] | None = None):
+    """初始化数据库表结构
+
+    Read `model_info.json` produced by the plugin init to detect embedding dimension.
+    If missing, fall back to original `schema.sql` without modification.
+    """
+    plugin_dir = os.path.dirname(__file__)
+
+    # Try to load model_info.json (produced by plugin init). This avoids probing from CLI.
+    model_info = None
+    model_info_path = os.path.join(plugin_dir, "model_info.json")
+    if os.path.exists(model_info_path):
+        try:
+            with open(model_info_path, "r", encoding="utf-8") as mf:
+                model_info = ujson.load(mf)
+            if model_info and "dimension" in model_info:
+                print(f"[INFO] Loaded model_info.json with dimension {model_info['dimension']}")
+            else:
+                print(f"[WARN] model_info.json does not contain dimension: {model_info}")
+        except Exception as e:
+            print(f"[WARN] Failed to read model_info.json: {e}")
+    else:
+        print("[WARN] model_info.json not found; will use schema.sql as-is")
+
+    # Read schema and patch vector size if we got a dimension
+    schema_path = os.path.join(plugin_dir, "schema.sql")
+    with open(schema_path, "r", encoding="utf-8") as f:
         init_script = f.read()
+
+    if model_info and isinstance(model_info, dict) and model_info.get("dimension"):
+        dim_val = model_info.get("dimension")
+        try:
+            dim = int(dim_val)
+        except Exception:
+            dim = None
+        if dim:
+
+            def _replacer(m):
+                return f"vector({dim})"
+
+            patched_script = re.sub(r"vector\(\s*\d+\s*\)", _replacer, init_script)
+            # Also save patched script for debugging
+            gen_path = os.path.join(plugin_dir, "schema.generated.sql")
+            try:
+                with open(gen_path, "w", encoding="utf-8") as gf:
+                    gf.write(patched_script)
+                print(f"[INFO] Wrote generated schema to {gen_path}")
+            except Exception:
+                pass
+            script_to_run = patched_script
+        else:
+            script_to_run = init_script
+    else:
+        script_to_run = init_script
+
+    # Execute SQL within a transaction
+    try:
         with db_conn.transaction():
-            await db_conn.execute(init_script)
-    print("[INFO] Graph memory tables initialized successfully.")
+            await db_conn.execute(script_to_run)
+        print("[INFO] Graph memory tables initialized successfully.")
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize database schema: {e}")
+        raise
 
 
 async def export_graph_memory(dbman: db_mod.GraphMemoryDB, export_path: str):
@@ -72,7 +129,7 @@ async def interactive_mode(dbman: db_mod.GraphMemoryDB, memory_search_config: db
         """)
         option = input("Please select an option (0-6): ").strip()
         if option == "1":
-            await initialize_database(dbman.db_conn)
+            await initialize_database(dbman.db_conn, cfg=None)
         elif option == "2":
             import datasets
 
@@ -147,12 +204,29 @@ async def setup_database_manager(cfg: dict) -> db_mod.GraphMemoryDB:
         auto_link=cfg["generic_cfg"]["auto_link"],
     )
 
+    # Prefer model_info.json credentials if available (written by plugin init)
+    plugin_dir = os.path.dirname(__file__)
+    model_info_path = os.path.join(plugin_dir, "model_info.json")
+    emb_base = cfg["openai_embedding"]["base_url"]
+    emb_key = cfg["openai_embedding"]["api_key"]
+    emb_model = cfg["openai_embedding"]["model"]
+    if os.path.exists(model_info_path):
+        try:
+            mi = ujson.load(open(model_info_path, "r", encoding="utf-8"))
+            pit = mi.get("plugin_config_snapshot", {}).get("openai_embedding", {})
+            emb_base = pit.get("base_url") or emb_base
+            emb_key = pit.get("api_key") or emb_key
+            emb_model = pit.get("model") or emb_model
+            print(f"[INFO] Using embedding credentials from model_info.json: model={emb_model}, base={emb_base}")
+        except Exception as e:
+            print(f"[WARN] Failed to read model_info.json for embedding creds: {e}")
+
     return (
         db_mod.GraphMemoryDB(
-            cfg["openai_embedding"]["base_url"],
+            emb_base,
             db_conn,
-            cfg["openai_embedding"]["api_key"],
-            cfg["openai_embedding"]["model"],
+            emb_key,
+            emb_model,
         ),
         memory_search_config,
         db_conn,
@@ -169,6 +243,9 @@ def parse_arguments():
 
     # init 命令
     subparsers.add_parser("init", help="初始化数据库结构")
+    # apply-update 命令
+    apply_parser = subparsers.add_parser("apply-update", help="Apply available plugin update (reads update_available.json)")
+    apply_parser.add_argument("--auto", action="store_true", help="Automatically apply the update (backup+pull+migration)")
 
     # import 命令
     import_parser = subparsers.add_parser("import", help="导入知识库 JSON 文件")
@@ -198,7 +275,19 @@ async def main():
 
     try:
         if args.command == "init":
-            await initialize_database(db_conn)
+            await initialize_database(db_conn, cfg=config)
+        elif args.command == "apply-update":
+            # call the helper script
+            script_path = os.path.join(os.path.dirname(__file__), "apply_update.py")
+            cmd = ["python", script_path]
+            if hasattr(args, 'auto') and args.auto:
+                cmd.append("--auto")
+            import subprocess
+            print(f"[INFO] Running apply_update: {' '.join(cmd)}")
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            print(proc.stdout)
+            if proc.returncode != 0:
+                print(proc.stderr)
         elif args.command == "import":
             await load_dataset_from_json(dbman, args.file_path, memory_search_config)
             print(f"[INFO] Dataset from '{args.file_path}' loaded successfully.")
