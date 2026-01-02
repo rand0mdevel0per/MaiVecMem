@@ -31,7 +31,6 @@ if target_path not in sys.path:
 
 from src.plugin_system import BasePlugin, register_plugin, ComponentInfo, ConfigField, BaseTool, config_api  # noqa: E402
 
-
 dbman = None
 cron_task = None
 config = None
@@ -325,7 +324,18 @@ class PgVecMemPlugin(BasePlugin):
     plugin_name = "pgvec_mem_plugin"
     enable_plugin = True
     dependencies = []
-    python_dependencies = ["uuid", "dataclasses", "typing", "asyncpg", "numpy", "openai", "timeit", "ujson"]
+    python_dependencies = [
+        "uuid",
+        "dataclasses",
+        "typing",
+        "asyncpg",
+        "numpy",
+        "openai",
+        "timeit",
+        "ujson",
+        "cryptography",
+        "keyring",
+    ]
     config_file_name = "config.toml"  # 配置文件名
     config_schema = {
         "postgresql": {
@@ -511,7 +521,8 @@ class PgVecMemPlugin(BasePlugin):
                                     for m in g.get("models", [])
                                 ]
                                 global_snapshot["api_providers"] = [
-                                    {"name": p.get("name"), "base_url": p.get("base_url")} for p in g.get("api_providers", [])
+                                    {"name": p.get("name"), "base_url": p.get("base_url")}
+                                    for p in g.get("api_providers", [])
                                 ]
                             except Exception:
                                 global_snapshot = {}
@@ -529,7 +540,9 @@ class PgVecMemPlugin(BasePlugin):
                                         try:
                                             enc = encrypt_for_service(model_sk)
                                             plugin_cfg_snap["openai_embedding"]["api_key_encrypted"] = enc
-                                            plugin_cfg_snap["openai_embedding"]["api_key_masked"] = model_sk[:4] + "..." + model_sk[-4:]
+                                            plugin_cfg_snap["openai_embedding"]["api_key_masked"] = (
+                                                model_sk[:4] + "..." + model_sk[-4:]
+                                            )
                                         except Exception as e:
                                             # fallback to not storing key
                                             plugin_cfg_snap["openai_embedding"]["api_key"] = None
@@ -537,7 +550,9 @@ class PgVecMemPlugin(BasePlugin):
                                     else:
                                         # no key storage available; avoid writing cleartext API key
                                         plugin_cfg_snap["openai_embedding"]["api_key"] = None
-                                        print("[WARN] secret_store unavailable; model_info.json will not contain api_key")
+                                        print(
+                                            "[WARN] secret_store unavailable; model_info.json will not contain api_key"
+                                        )
                             except Exception:
                                 pass
 

@@ -44,6 +44,7 @@ def _ensure_plugin_modules() -> None:
     This is intentionally minimal and only mutates sys.path in-process. It is safe to call repeatedly.
     """
     import sys
+
     plugin_dir = os.path.dirname(__file__)
     repo_root = os.path.abspath(os.path.join(plugin_dir, "..", ".."))
 

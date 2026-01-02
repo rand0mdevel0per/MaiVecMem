@@ -12,6 +12,7 @@ Notes:
   to a local `.secret_key` file in the plugin directory (with restricted permissions when possible).
 - The encryption output is base64(nonce || ciphertext). Nonce length is 12 bytes (recommended for AES-GCM).
 """
+
 from __future__ import annotations
 
 import os
@@ -110,4 +111,3 @@ def decrypt_for_service(token_b64: str) -> str:
 def key_available() -> bool:
     """Return True if encryption/decryption is possible in this environment."""
     return AESGCM is not None and _ensure_key_bytes() is not None
-
