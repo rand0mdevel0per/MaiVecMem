@@ -13,7 +13,7 @@ target_path = os.path.abspath(os.path.join(current_dir, "../.."))
 if target_path not in sys.path:
     sys.path.insert(0, target_path)
 
-from src.plugin_system import BasePlugin, register_plugin, ComponentInfo, ConfigField, BaseTool
+from src.plugin_system import BasePlugin, register_plugin, ComponentInfo, ConfigField, BaseTool, config_api
 
 dbman = None
 cron_task = None
@@ -73,19 +73,19 @@ class PgVecMemPlugin(BasePlugin):
                 default="sk-xxx",
                 description="OpenAI API密钥",
                 input_type="password",
-                hint="用于访问OpenAI嵌入模型的API密钥",
+                hint="用于访问OpenAI嵌入模型的API密钥，如果在全局配置中已设置，则可以留空",
             ),
             "model": ConfigField(
                 type=str,
                 default="baai/bge-m3",
                 description="OpenAI嵌入模型名称",
-                hint="用于生成文本嵌入的OpenAI模型名称，例如：text-embedding-ada-002",
+                hint="用于生成文本嵌入的OpenAI模型名称，例如：text-embedding-ada-002，baai/bge-m3等，如果在全局配置中已设置，则可以留空",
             ),
             "base_url": ConfigField(
                 type=str,
                 default="https://openrouter.ai/api/v1",
                 description="OpenAI API基础URL",
-                hint="如果你使用的是OpenAI的自定义部署或代理，请在此处指定基础URL",
+                hint="如果你使用的是OpenAI的自定义部署或代理，请在此处指定基础URL，如果在全局配置中已设置，则可以留空",
             ),
         },
         "generic_cfg": {
@@ -150,11 +150,38 @@ class PgVecMemPlugin(BasePlugin):
                     similarity_threshold=self.get_config("generic_cfg.similarity_threshold"),
                     auto_link=self.get_config("generic_cfg.auto_link"),
                 )
+                model_burl = ""
+                model_id = ""
+                model_sk = ""
+                if len(list(config_api.get_global_config("model_task_config.embedding.model_list"))) > 0:
+                    model_name = list(config_api.get_global_config("model_task_config.embedding.model_list"))[0]
+                    model_cfgs = list(config_api.get_global_config("models"))
+                    model_provider = ""
+                    for md in model_cfgs:
+                        if md.get("name") == model_name:
+                            model_id = md.get("model_identifier", "")
+                            model_provider = md.get("api_provider", "")
+                            break
+                    if model_provider == "" or model_id == "":
+                        model_burl = self.get_config("openai_embedding.base_url")
+                        model_sk = self.get_config("openai_embedding.api_key")
+                        model_id = self.get_config("openai_embedding.model")
+                    else:
+                        providers = list(config_api.get_global_config("api_providers"))
+                        for pd in providers:
+                            if pd.get("name") == model_provider:
+                                model_burl = pd.get("base_url", "")
+                                model_sk = pd.get("api_key", "")
+                                break
+                else:
+                    model_burl = self.get_config("openai_embedding.base_url")
+                    model_id = self.get_config("openai_embedding.model")
+                    model_sk = self.get_config("openai_embedding.api_key")
                 dbman = db_mod.GraphMemoryDB(
-                    self.get_config("openai_embedding.base_url"),
+                    model_burl,
                     db_conn,
-                    self.get_config("openai_embedding.api_key"),
-                    self.get_config("openai_embedding.model"),
+                    model_sk,
+                    model_id,
                 )
 
                 async def cron_task_():
