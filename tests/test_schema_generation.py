@@ -4,6 +4,7 @@ from plugins.MaiVecMem import cli_tool
 
 # Simple test: create a fake model_info.json with dimension 512 and ensure schema.generated.sql is created
 
+
 def test_schema_generation(tmp_path, monkeypatch):
     os.path.dirname(os.path.abspath(__file__))
 
@@ -32,7 +33,9 @@ def test_schema_generation(tmp_path, monkeypatch):
 
         async def execute(self, script):
             # write to a file to simulate execution
-            open(os.path.join(os.path.dirname(__file__), "..", "executed_schema.sql"), "w", encoding="utf-8").write(script)
+            open(os.path.join(os.path.dirname(__file__), "..", "executed_schema.sql"), "w", encoding="utf-8").write(
+                script
+            )
 
     fake_conn = FakeConn()
 
@@ -42,4 +45,3 @@ def test_schema_generation(tmp_path, monkeypatch):
 
     gen_path = os.path.join(os.path.dirname(__file__), "..", "schema.generated.sql")
     assert os.path.exists(gen_path)
-

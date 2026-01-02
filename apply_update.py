@@ -7,6 +7,7 @@ Usage:
 If --auto is set, the script will attempt to git pull and apply migration (if available), otherwise it will just print the update info.
 The script expects to be run from repository root or pass plugin-dir explicitly.
 """
+
 import argparse
 import os
 import ujson
@@ -102,13 +103,14 @@ def main():
             print(f"Applying migration: {migration_file}")
             # run psql - but we don't know credentials here; expect environment or user will run migration
             # For safety, we just print path and return success
-            print("Migration file present. Please apply it with proper DB credentials (psql) or enable auto_apply in plugin config to let plugin do it.")
+            print(
+                "Migration file present. Please apply it with proper DB credentials (psql) or enable auto_apply in plugin config to let plugin do it."
+            )
         else:
             print("No migration file found in plugin dir; plugin may fetch remote migration during background check.")
 
-    print("Update applied (files pulled). If plugin requires reload, use plugin_manage_api to reload or restart host." )
+    print("Update applied (files pulled). If plugin requires reload, use plugin_manage_api to reload or restart host.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-

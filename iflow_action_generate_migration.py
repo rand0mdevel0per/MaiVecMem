@@ -19,6 +19,7 @@ Behavior:
 
 3) If the marker is missing, fallback to capturing stdout as the migration SQL and behave as previous implementation.
 """
+
 import os
 import subprocess
 import time
@@ -79,7 +80,9 @@ Write the migration SQL file and the marker file exactly as specified. Do not as
 
 def fallback_generate_stub(change_desc: str) -> str:
     ts = int(time.time())
-    return f"-- migration {ts}\n-- desc: {change_desc}\nBEGIN;\n-- add your ALTER TABLE / data migrations here\nCOMMIT;\n"
+    return (
+        f"-- migration {ts}\n-- desc: {change_desc}\nBEGIN;\n-- add your ALTER TABLE / data migrations here\nCOMMIT;\n"
+    )
 
 
 def git_commit_and_push(files: list, branch: str = "migration-scripts", commit_message: str = None):
@@ -186,7 +189,9 @@ def main(change_desc: str = "auto-migration"):
         f.write(migration_sql)
 
     try:
-        git_commit_and_push([target_path], branch="migration-scripts", commit_message=f"Add migration {commit_id} - {change_desc}")
+        git_commit_and_push(
+            [target_path], branch="migration-scripts", commit_message=f"Add migration {commit_id} - {change_desc}"
+        )
         print("Migration published using fallback stdout path.")
     except Exception as e:
         print(f"Failed to publish migration: {e}")
@@ -194,6 +199,7 @@ def main(change_desc: str = "auto-migration"):
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--desc", type=str, default="auto-migration")
     args = parser.parse_args()

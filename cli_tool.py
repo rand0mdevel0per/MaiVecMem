@@ -7,8 +7,10 @@ import asyncpg
 import ujson
 import re
 import os
+import numpy as np
 
 from . import db_mod, hf_converter
+from . import libopenie
 
 
 def load_config(file_path: str) -> dict:
@@ -124,10 +126,12 @@ async def interactive_mode(dbman: db_mod.GraphMemoryDB, memory_search_config: db
         [4] Test Memory Search
         [5] Manually Add Memory Entry
         [6] Export Graph Memory to JSON
+        [7] Import Data from OpenIE JSON (xxx-openie.json)
+        [8] Import Batched Data from OpenIE JSON Directory (xxx/*-openie.json)
         [0] Exit
         ==================================================================
         """)
-        option = input("Please select an option (0-6): ").strip()
+        option = input("Please select an option (0-8): ").strip()
         if option == "1":
             await initialize_database(dbman.db_conn, cfg=None)
         elif option == "2":
@@ -177,11 +181,219 @@ async def interactive_mode(dbman: db_mod.GraphMemoryDB, memory_search_config: db
         elif option == "6":
             export_path = input("Enter export JSON file path: ").strip()
             await export_graph_memory(dbman, export_path)
+        elif option == "7":
+            file_path = input("Enter OpenIE JSON file path: ").strip()
+            strat = input("Strategy (subject/relation/hybrid/semantic/entity) [semantic]: ").strip() or "semantic"
+            min_inst = None
+            if strat == "hybrid":
+                v = input("min_instances for hybrid (default 2): ").strip()
+                min_inst = int(v) if v.isdigit() else 2
+            if strat == "semantic":
+                v = input("similarity_threshold (0.0-1.0, default 0.7): ").strip()
+                try:
+                    simt = float(v) if v else 0.7
+                except Exception:
+                    simt = 0.7
+                kw = {
+                    "similarity_threshold": simt,
+                    "min_instances": int(input("min_instances for clusters (default 1): ").strip() or 1),
+                }
+            else:
+                kw = {}
+                if min_inst is not None:
+                    kw["min_instances"] = min_inst
+            await load_openie_to_db(dbman, file_path, memory_search_config, strategy=strat, **kw)
+        elif option == "8":
+            dir_path = input("Enter directory path containing OpenIE JSON files: ").strip()
+            strat = input("Strategy (subject/relation/hybrid/semantic/entity) [semantic]: ").strip() or "semantic"
+            min_inst = None
+            if strat == "hybrid":
+                v = input("min_instances for hybrid (default 2): ").strip()
+                min_inst = int(v) if v.isdigit() else 2
+            if strat == "semantic":
+                v = input("similarity_threshold (0.0-1.0, default 0.7): ").strip()
+                try:
+                    simt = float(v) if v else 0.7
+                except Exception:
+                    simt = 0.7
+                kw = {
+                    "similarity_threshold": simt,
+                    "min_instances": int(input("min_instances for clusters (default 1): ").strip() or 1),
+                }
+            else:
+                kw = {}
+                if min_inst is not None:
+                    kw["min_instances"] = min_inst
+            for fname in os.listdir(dir_path):
+                if fname.endswith("-openie.json"):
+                    fpath = os.path.join(dir_path, fname)
+                    print(f"[INFO] Importing from '{fpath}'...")
+                    await load_openie_to_db(dbman, fpath, memory_search_config, strategy=strat, **kw)
         elif option == "0":
             print("Exiting interactive mode.")
             break
         else:
             print("Invalid option. Please try again.")
+
+
+async def load_openie_to_db(
+    dbman: db_mod.GraphMemoryDB,
+    file_path: str,
+    memory_search_config: db_mod.MemorySearchConfig,
+    strategy: str = "subject",
+    **kwargs,
+):
+    """从 OpenIE JSON 文件加载并导入到 GraphMemoryDB
+
+    - file_path: OpenIE JSON 文件路径
+    - strategy: 聚合策略（subject/relation/hybrid/semantic/entity）
+    - kwargs: 传递给转换器的策略特定参数（例如 hybrid 的 min_instances 或 semantic 的 similarity_threshold）
+    """
+    # For non-semantic strategies we defer to the converter which already aggregates topics
+    if strategy != "semantic":
+        try:
+            converted = libopenie.OpenIEConverter.convert(file_path, strategy, **kwargs)
+        except Exception as e:
+            print(f"[ERROR] Failed to convert OpenIE file: {e}")
+            return
+
+        if not converted:
+            print("[WARN] No topics produced from OpenIE converter; nothing to import.")
+            return
+
+        # 转换为 batch 格式: List[Tuple[topic, List[str]]]
+        batch = [(topic, list(instances)) for topic, instances in converted.items()]
+
+        try:
+            success = await dbman.batch_add_mem(batch, memory_search_config)
+            if success:
+                print(f"[INFO] Imported {len(batch)} topics from OpenIE file '{file_path}' successfully.")
+            else:
+                print("[WARN] Import may have partially failed or no new items were added.")
+        except Exception as e:
+            print(f"[ERROR] Exception while importing into DB: {e}")
+        return
+
+    # ----------------------------
+    # semantic 聚类实现
+    # ----------------------------
+    try:
+        converted_raw = libopenie.OpenIEConverter.load_raw(file_path)
+    except Exception:
+        # fallback: try convert to get raw mapping
+        try:
+            converted_raw = libopenie.OpenIEConverter.convert(file_path, "relation", **kwargs)
+        except Exception as e2:
+            print(f"[ERROR] Failed to read OpenIE file for semantic processing: {e2}")
+            return
+
+    # Flatten instances: converted_raw may be dict(topic->instances) or list of triples; try to produce list
+    all_instances = []
+    # If converter returned dict-like
+    if isinstance(converted_raw, dict):
+        for insts in converted_raw.values():
+            for s in insts:
+                all_instances.append(s)
+    elif isinstance(converted_raw, list):
+        # list of triplets or entries
+        for item in converted_raw:
+            if isinstance(item, dict):
+                # try keys 'sentence' or 'text'
+                txt = item.get("sentence") or item.get("text") or item.get("surface")
+                if txt:
+                    all_instances.append(txt)
+            elif isinstance(item, (list, tuple)) and len(item) >= 1:
+                all_instances.append(item[0])
+    else:
+        print("[WARN] Unrecognized OpenIE raw format for semantic strategy")
+        return
+
+    # deduplicate while preserving order
+    seen = set()
+    uniq_instances = []
+    for s in all_instances:
+        if s is None:
+            continue
+        key = s.strip()
+        if key and key not in seen:
+            seen.add(key)
+            uniq_instances.append(key)
+
+    if not uniq_instances:
+        print("[WARN] No textual instances found for semantic clustering")
+        return
+
+    # get embeddings using dbman internal embedder (run in batch)
+    try:
+        embs = await dbman._embed(uniq_instances)
+    except Exception as e:
+        print(f"[ERROR] Failed to compute embeddings for semantic clustering: {e}")
+        return
+
+    # ensure embeddings as numpy arrays
+    emb_arrays = []
+    if isinstance(embs, list):
+        emb_arrays = embs
+    else:
+        emb_arrays = [embs]
+
+    # greedy clustering by cosine similarity to centroids
+    sim_threshold = float(kwargs.get("similarity_threshold", 0.7))
+    clusters = []  # list of dict: {centroid: np.array, items: [indices]}
+
+    def cosine(a, b):
+        if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
+            return 0.0
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+    for idx, v in enumerate(emb_arrays):
+        assigned = False
+        for cl in clusters:
+            sim = cosine(v, cl["centroid"])
+            if sim >= sim_threshold:
+                # assign
+                cl["indices"].append(idx)
+                # update centroid
+                pts = [emb_arrays[i] for i in cl["indices"]]
+                cl["centroid"] = np.mean(np.stack(pts, axis=0), axis=0)
+                assigned = True
+                break
+        if not assigned:
+            clusters.append({"centroid": v.copy(), "indices": [idx]})
+
+    # build batch: pick representative sentence as topic name (closest to centroid)
+    batch = []
+    min_instances = int(kwargs.get("min_instances", 1))
+    for ci, cl in enumerate(clusters):
+        if len(cl["indices"]) < min_instances:
+            # skip small clusters
+            continue
+        indices = cl["indices"]
+        centroid = cl["centroid"]
+        # find representative
+        best_i = None
+        best_s = -1.0
+        for i in indices:
+            s = cosine(emb_arrays[i], centroid)
+            if s > best_s:
+                best_s = s
+                best_i = i
+        topic_name = uniq_instances[best_i][:80] if best_i is not None else f"semantic_cluster_{ci}"
+        instances = [uniq_instances[i] for i in indices]
+        batch.append((topic_name, instances))
+
+    if not batch:
+        print("[WARN] No clusters met min_instances threshold; nothing to import.")
+        return
+
+    try:
+        success = await dbman.batch_add_mem(batch, memory_search_config)
+        if success:
+            print(f"[INFO] Imported {len(batch)} semantic clusters from OpenIE file '{file_path}' successfully.")
+        else:
+            print("[WARN] Semantic import may have partially failed.")
+    except Exception as e:
+        print(f"[ERROR] Exception while importing semantic clusters into DB: {e}")
 
 
 async def setup_database_manager(cfg: dict) -> db_mod.GraphMemoryDB:
@@ -244,12 +456,47 @@ def parse_arguments():
     # init 命令
     subparsers.add_parser("init", help="初始化数据库结构")
     # apply-update 命令
-    apply_parser = subparsers.add_parser("apply-update", help="Apply available plugin update (reads update_available.json)")
-    apply_parser.add_argument("--auto", action="store_true", help="Automatically apply the update (backup+pull+migration)")
+    apply_parser = subparsers.add_parser(
+        "apply-update", help="Apply available plugin update (reads update_available.json)"
+    )
+    apply_parser.add_argument(
+        "--auto", action="store_true", help="Automatically apply the update (backup+pull+migration)"
+    )
 
     # import 命令
     import_parser = subparsers.add_parser("import", help="导入知识库 JSON 文件")
     import_parser.add_argument("file_path", help="JSON 文件路径")
+
+    # import-openie 命令: 导入 OpenIE 格式的 JSON 文件
+    import_oi_parser = subparsers.add_parser("import-openie", help="导入 OpenIE JSON 文件并转换为 topic-instance 格式")
+    import_oi_parser.add_argument("file_path", help="OpenIE JSON 文件路径")
+    import_oi_parser.add_argument(
+        "--strategy",
+        choices=["subject", "relation", "hybrid", "semantic", "entity"],
+        default="subject",
+        help="聚合策略，默认 subject",
+    )
+    import_oi_parser.add_argument(
+        "--min-instances", type=int, default=2, help="仅对 hybrid 策略有效：topic 最少包含实例数（默认 2)"
+    )
+
+    # 新增：import-openie-dir 命令: 导入目录中所有 OpenIE JSON 文件
+    import_oi_dir_parser = subparsers.add_parser(
+        "import-openie-dir", help="导入目录下的所有 OpenIE JSON 文件并逐个转换导入"
+    )
+    import_oi_dir_parser.add_argument("dir_path", help="包含 OpenIE JSON 文件的目录路径")
+    import_oi_dir_parser.add_argument(
+        "--pattern", default="-openie.json", help="匹配文件后缀或模式（默认 '-openie.json'，也可以使用 '.json'）"
+    )
+    import_oi_dir_parser.add_argument(
+        "--strategy",
+        choices=["subject", "relation", "hybrid", "semantic", "entity"],
+        default="semantic",
+        help="聚合策略，默认 semantic",
+    )
+    import_oi_dir_parser.add_argument(
+        "--min-instances", type=int, default=2, help="仅对 hybrid 策略有效：topic 最少包含实例数（默认 2)"
+    )
 
     # search 命令
     search_parser = subparsers.add_parser("search", help="搜索相关记忆")
@@ -265,10 +512,63 @@ def parse_arguments():
     return parser.parse_args()
 
 
+def load_cli_config() -> dict:
+    """Load minimal config for CLI:
+    - PostgreSQL creds are read from repo `config.toml` if present (only postgresql section used)
+    - Other settings (openai_embedding, generic_cfg) are read from plugins/MaiVecMem/model_info.json (must exist)
+    This satisfies: CLI only needs pg creds from repo config and everything else from model_info.json.
+    """
+    plugin_dir = os.path.dirname(__file__)
+
+    # Load PG creds from repo config.toml if available (only use 'postgresql' section)
+    repo_cfg = {}
+    try:
+        repo_cfg = load_config("config.toml")
+    except Exception:
+        repo_cfg = {}
+    pg = repo_cfg.get("postgresql", {})
+
+    # Require model_info.json in plugin dir
+    model_info_path = os.path.join(plugin_dir, "model_info.json")
+    if not os.path.exists(model_info_path):
+        raise FileNotFoundError(f"model_info.json not found in plugin directory: {model_info_path}")
+
+    try:
+        mi = ujson.load(open(model_info_path, "r", encoding="utf-8"))
+    except Exception as e:
+        raise RuntimeError(f"Failed to load model_info.json: {e}")
+
+    snapshot = mi.get("plugin_config_snapshot", {})
+    openai_embedding = snapshot.get("openai_embedding", {})
+
+    # Provide reasonable defaults for generic_cfg if not present
+    generic_defaults = {
+        "dropout_rate": 0.3,
+        "min_edge_weight": 0.2,
+        "max_depth": 5,
+        "strengthen_boost": 0.1,
+        "similarity_threshold": 0.75,
+        "auto_link": True,
+    }
+    generic_cfg = snapshot.get("generic_cfg", generic_defaults)
+
+    return {
+        "postgresql": pg,
+        "openai_embedding": openai_embedding,
+        "generic_cfg": generic_cfg,
+    }
+
+
 async def main():
     """主函数"""
-    config = load_config("config.toml")
     args = parse_arguments()
+
+    # Load minimal CLI config: pg creds from repo config.toml and other settings from model_info.json
+    try:
+        config = load_cli_config()
+    except Exception as e:
+        print(f"[ERROR] Failed to load CLI config (pg creds + model_info.json): {e}")
+        return
 
     dbman, memory_search_config, db_conn = await setup_database_manager(config)
     print("[INFO] Connected to database successfully")
@@ -280,14 +580,45 @@ async def main():
             # call the helper script
             script_path = os.path.join(os.path.dirname(__file__), "apply_update.py")
             cmd = ["python", script_path]
-            if hasattr(args, 'auto') and args.auto:
+            if hasattr(args, "auto") and args.auto:
                 cmd.append("--auto")
             import subprocess
+
             print(f"[INFO] Running apply_update: {' '.join(cmd)}")
             proc = subprocess.run(cmd, capture_output=True, text=True)
             print(proc.stdout)
             if proc.returncode != 0:
                 print(proc.stderr)
+        elif args.command == "import-openie":
+            # Use OpenIE converter and import into DB
+            strategy = getattr(args, "strategy", "subject")
+            min_instances = getattr(args, "min_instances", None) or getattr(args, "min-instances", None)
+            kw = {}
+            if min_instances is not None:
+                kw["min_instances"] = int(min_instances)
+            await load_openie_to_db(dbman, args.file_path, memory_search_config, strategy=strategy, **kw)
+        elif args.command == "import-openie-dir":
+            # Import all matching OpenIE JSON files from a directory
+            dir_path = getattr(args, "dir_path", None)
+            if not dir_path or not os.path.isdir(dir_path):
+                print(f"[ERROR] Provided path is not a directory: {dir_path}")
+            else:
+                pattern = getattr(args, "pattern", "-openie.json")
+                strategy = getattr(args, "strategy", "semantic")
+                min_instances = getattr(args, "min_instances", None) or getattr(args, "min-instances", None)
+                kw = {}
+                if min_instances is not None:
+                    kw["min_instances"] = int(min_instances)
+                print(f"[INFO] Scanning directory '{dir_path}' for files matching '{pattern}'")
+                for fname in sorted(os.listdir(dir_path)):
+                    if (
+                        pattern == ".json"
+                        and fname.endswith(".json")
+                        or (pattern != ".json" and fname.endswith(pattern))
+                    ):
+                        fpath = os.path.join(dir_path, fname)
+                        print(f"[INFO] Importing from '{fpath}'...")
+                        await load_openie_to_db(dbman, fpath, memory_search_config, strategy=strategy, **kw)
         elif args.command == "import":
             await load_dataset_from_json(dbman, args.file_path, memory_search_config)
             print(f"[INFO] Dataset from '{args.file_path}' loaded successfully.")
