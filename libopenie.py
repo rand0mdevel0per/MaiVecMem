@@ -150,7 +150,7 @@ class OpenIEConverter:
         subject_freq = defaultdict(int)
         relation_freq = defaultdict(int)
 
-        for subject, relation, obj in triples:
+        for subject, relation, _obj in triples:
             subject_freq[subject] += 1
             relation_freq[relation] += 1
 
@@ -192,7 +192,7 @@ class OpenIEConverter:
             from sklearn.cluster import KMeans
             import numpy as np
         except ImportError:
-            raise ImportError("scikit-learn and numpy are required for semantic clustering strategy")
+            raise ImportError("scikit-learn and numpy are required for semantic clustering strategy") from None
 
         # 生成三元组的文本表示
         triple_texts = [f"{s} {r} {o}" for s, r, o in triples]

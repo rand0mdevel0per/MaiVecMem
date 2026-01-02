@@ -27,7 +27,7 @@ target_path = os.path.abspath(os.path.join(current_dir, "../.."))
 if target_path not in sys.path:
     sys.path.insert(0, target_path)
 
-from src.plugin_system import BasePlugin, register_plugin, ComponentInfo, ConfigField, BaseTool, config_api
+from src.plugin_system import BasePlugin, register_plugin, ComponentInfo, ConfigField, BaseTool, config_api  # noqa: E402
 
 dbman = None
 cron_task = None

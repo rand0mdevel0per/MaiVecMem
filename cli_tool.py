@@ -1,16 +1,49 @@
+# Ensure running as a script sets package context before relative imports
+if __name__ == "__main__" and __package__ is None:
+    import sys
+    import os
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    __package__ = "plugins.MaiVecMem"
+
 import asyncio
 import tomllib
 import argparse
 from typing import Dict, Any
 
 import asyncpg
-import ujson
 import re
 import os
 import numpy as np
 
 from . import db_mod, hf_converter
 from . import libopenie
+
+
+# Prefer ujson for speed but fall back to stdlib json if unavailable
+try:
+    import ujson as ujson  # type: ignore
+except Exception:
+    import json as ujson  # type: ignore
+
+
+def _ensure_plugin_modules() -> None:
+    """Ensure plugin and repo paths are on sys.path so local imports work when running as a script.
+
+    This is intentionally minimal and only mutates sys.path in-process. It is safe to call repeatedly.
+    """
+    import sys
+    plugin_dir = os.path.dirname(__file__)
+    repo_root = os.path.abspath(os.path.join(plugin_dir, "..", ".."))
+
+    # prepend plugin_dir first so local package imports resolve
+    if plugin_dir not in sys.path:
+        sys.path.insert(0, plugin_dir)
+    # also ensure repo root is available for importing shared modules
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
 
 
 def load_config(file_path: str) -> dict:
@@ -24,6 +57,7 @@ async def load_dataset_from_json(
     dbman: db_mod.GraphMemoryDB, file_path: str, memory_search_config: db_mod.MemorySearchConfig
 ):
     """从JSON文件加载数据集到数据库"""
+    _ensure_plugin_modules()
     json_raw: Dict[str, Any] = ujson.load(open(file_path, "r", encoding="utf-8"))
     batch = []
     for entry in json_raw.keys():
@@ -88,7 +122,7 @@ async def initialize_database(db_conn: asyncpg.Connection, cfg: Dict[str, Any] |
 
     # Execute SQL within a transaction
     try:
-        with db_conn.transaction():
+        async with db_conn.transaction():
             await db_conn.execute(script_to_run)
         print("[INFO] Graph memory tables initialized successfully.")
     except Exception as e:
@@ -119,6 +153,7 @@ async def interactive_mode(dbman: db_mod.GraphMemoryDB, memory_search_config: db
 
     Reordered options for a more logical workflow.
     """
+    _ensure_plugin_modules()
     while True:
         print(
             "\nMaiVecMem CLI - Interactive Menu\n========================================\n[1] Initialize graph memory tables\n[2] Import OpenIE directory (batch)\n[3] Import OpenIE file (single)\n[4] Load dataset from HuggingFace\n[5] Load dataset from local JSON file\n[6] Test memory search\n[7] Manually add memory entry\n[8] Export graph memory to JSON\n[0] Exit\n========================================"
@@ -237,6 +272,7 @@ async def load_openie_to_db(
     strategy: str = "subject",
     **kwargs,
 ):
+    _ensure_plugin_modules()
     """从 OpenIE JSON 文件加载并导入到 GraphMemoryDB
 
     - file_path: OpenIE JSON 文件路径
@@ -392,6 +428,7 @@ async def load_openie_to_db(
 
 async def setup_database_manager(cfg: dict) -> db_mod.GraphMemoryDB:
     """设置数据库管理器"""
+    _ensure_plugin_modules()
     db_conn = await asyncpg.connect(
         host=cfg["postgresql"]["host"],
         port=cfg["postgresql"]["port"],
@@ -530,7 +567,7 @@ def load_cli_config() -> dict:
     try:
         mi = ujson.load(open(model_info_path, "r", encoding="utf-8"))
     except Exception as e:
-        raise RuntimeError(f"Failed to load model_info.json: {e}")
+        raise RuntimeError(f"Failed to load model_info.json: {e}") from None
 
     snapshot = mi.get("plugin_config_snapshot", {})
     openai_embedding = snapshot.get("openai_embedding", {})
