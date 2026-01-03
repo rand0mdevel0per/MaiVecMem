@@ -29,7 +29,7 @@ target_path = os.path.abspath(os.path.join(current_dir, "../.."))
 if target_path not in sys.path:
     sys.path.insert(0, target_path)
 
-from src.plugin_system import BasePlugin, register_plugin, ComponentInfo, ConfigField, BaseTool, config_api  # noqa: E402
+from src.plugin_system import BasePlugin, register_plugin, ComponentInfo, ConfigField, BaseTool, config_api, ToolParamType  # noqa: E402
 
 dbman = None
 cron_task = None
@@ -607,8 +607,8 @@ class ReadMem(BaseTool):
     description = "这个工具用来读取记忆库中的信息"
 
     parameters = [
-        ("query", "string", "查询参数", True),
-        ("limit", "integer", "返回结果的数量限制，默认为无", False),
+        ("query", ToolParamType.STRING, "查询参数", True, None),
+        ("limit", ToolParamType.INTEGER, "返回结果的数量限制，默认为无", False, None),
     ]
 
     available_for_llm = True  # 是否对LLM可用
@@ -641,8 +641,8 @@ class WriteMem(BaseTool):
     description = "这个工具用来写入记忆库中的信息"
 
     parameters = [
-        ("topic", "string", "记忆主题", True),
-        ("instance", "string", "记忆内容", True),
+        ("topic", "string", "记忆主题", True, None),
+        ("instance", ToolParamType.STRING, "记忆内容", True, None),
     ]
 
     available_for_llm = True  # 是否对LLM可用
